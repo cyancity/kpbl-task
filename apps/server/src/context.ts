@@ -23,6 +23,8 @@ export interface AppHooks {
 export interface FaultInjection {
   /** test-only: makes the next gateway-event handler throw. */
   failNextEventHandler: boolean;
+  /** test-only: makes the agent engine throw right after committing an executing step. */
+  failAfterExecuting: boolean;
 }
 
 export interface AppContext {

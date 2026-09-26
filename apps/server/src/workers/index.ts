@@ -5,6 +5,7 @@ import { startReconcilerWorker } from "./unknownReconciler.js";
 import { startRateLimitWorker } from "./rateLimit.js";
 import { startWsPusher } from "../ws/server.js";
 import { startJobWorker } from "./jobs.js";
+import { startAgentWorker } from "./agent.js";
 import type { WorkerHandle } from "./loop.js";
 
 export interface WorkersHandle {
@@ -17,6 +18,7 @@ export function startWorkers(ctx: AppContext): WorkersHandle {
     startReconcilerWorker(ctx),
     startRateLimitWorker(ctx),
     startJobWorker(ctx),
+    startAgentWorker(ctx),
     startWsPusher(ctx),
     startConsumer(ctx),
   ];

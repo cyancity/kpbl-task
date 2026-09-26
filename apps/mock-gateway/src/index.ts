@@ -231,6 +231,17 @@ class MockGateway {
       });
       return;
     }
+    // Resends carry the same clientMsgId; the gateway collapses them into one message.
+    const existing = this.groupMessages(group.id).find((m) => m.clientMsgId === clientMsgId);
+    if (existing) {
+      this.emit("message_sent", {
+        groupId: group.id,
+        clientMsgId,
+        msgId: existing.msgId,
+        sentAt: existing.sentAt,
+      });
+      return;
+    }
     const msgId = `m-${++this.msgSeq}`;
     const sentAt = Date.now();
     this.groupMessages(group.id).push({ msgId, clientMsgId, sentAt });

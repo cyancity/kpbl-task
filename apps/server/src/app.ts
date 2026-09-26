@@ -12,6 +12,8 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerGroupRoutes } from "./routes/groups.js";
 import { registerJobRoutes } from "./routes/jobs.js";
+import { registerAgentRunRoutes } from "./routes/agentRuns.js";
+import { onInboundMessageTrigger } from "./domain/agent/trigger.js";
 import { registerWsRoute } from "./ws/server.js";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
@@ -54,10 +56,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     gateway,
     sessionCache,
     hooks: {
-      onInboundMessage: async () => {},
+      onInboundMessage: onInboundMessageTrigger,
       onMemberJoined: async () => {},
     },
-    faults: { failNextEventHandler: false },
+    faults: { failNextEventHandler: false, failAfterExecuting: false },
     log,
     authenticate,
     verifyAccess,
@@ -117,6 +119,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerAccountRoutes(app, ctx);
   registerGroupRoutes(app, ctx);
   registerJobRoutes(app, ctx);
+  registerAgentRunRoutes(app, ctx);
   registerWsRoute(app, ctx);
 
   app.addHook("onClose", async () => {

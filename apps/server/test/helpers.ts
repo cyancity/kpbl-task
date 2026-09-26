@@ -1,6 +1,7 @@
 import pg from "pg";
 import { FastifyInstance } from "fastify";
 import { buildMockGateway } from "../../mock-gateway/src/index.js";
+import { buildMockAgent } from "../../mock-agent/src/index.js";
 import { buildApp } from "../src/app.js";
 import { createPool } from "../src/db/pool.js";
 import { runMigrations } from "../src/db/migrate.js";
@@ -43,7 +44,9 @@ export async function truncateAll(pool: pg.Pool): Promise<void> {
 export interface TestEnv {
   app: FastifyInstance;
   gatewayApp: FastifyInstance;
+  agentApp: FastifyInstance;
   gatewayUrl: string;
+  agentUrl: string;
   pool: pg.Pool;
 }
 
@@ -66,17 +69,24 @@ export async function startTestEnv(): Promise<TestEnv> {
     },
   });
 
+  const agentApp = buildMockAgent();
+  await agentApp.listen({ port: 0, host: "127.0.0.1" });
+  const aaddr = agentApp.server.address();
+  const agentUrl = `http://127.0.0.1:${typeof aaddr === "object" && aaddr ? aaddr.port : 0}`;
+
   const config: AppConfig = {
     port: 0,
     databaseUrl: TEST_DB_URL,
     gatewayUrl,
-    agentUrl: "http://localhost:4100",
+    agentUrl,
     jwtSecret: "test-secret",
     joinTimeoutMs: 10_000,
+    agentTurnTimeoutMs: 1500,
+    auditTimeoutMs: 800,
   };
   const app = await buildApp(config);
   const pool = createPool(TEST_DB_URL);
-  return { app, gatewayApp, gatewayUrl, pool };
+  return { app, gatewayApp, agentApp, gatewayUrl, agentUrl, pool };
 }
 
 export async function waitFor(
@@ -140,6 +150,7 @@ export async function seedGroup(
 export async function stopTestEnv(env: TestEnv): Promise<void> {
   await env.app.close();
   await env.gatewayApp.close();
+  await env.agentApp.close();
   await env.pool.end();
 }
 

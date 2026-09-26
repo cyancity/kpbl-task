@@ -8,6 +8,7 @@ export interface EnqueueSendOptions {
   text: string;
   sequenceRunStepId?: string;
   agentStepId?: string;
+  clientMsgId?: string;
 }
 
 export async function enqueueSend(
@@ -18,7 +19,7 @@ export async function enqueueSend(
     "SELECT platform_user_id FROM accounts WHERE id = $1",
     [opts.accountId],
   );
-  const clientMsgId = crypto.randomUUID();
+  const clientMsgId = opts.clientMsgId ?? crypto.randomUUID();
   await client.query(
     `INSERT INTO messages
        (group_id, client_msg_id, sender_account_id, sender_platform_user_id,
