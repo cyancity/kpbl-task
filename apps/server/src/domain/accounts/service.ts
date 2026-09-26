@@ -64,7 +64,7 @@ export async function transitionAccountTx(
             updated_at = now(),
             platform_user_id = COALESCE($4, platform_user_id),
             rate_limited_until = CASE WHEN $2 = 'rate_limited'
-                                      THEN COALESCE($5, rate_limited_until)
+                                      THEN COALESCE($5, now() + interval '60 seconds')
                                       ELSE NULL END
       WHERE id = $1 AND status = $3
       RETURNING id, status, platform_user_id, rate_limited_until, version`,
@@ -76,8 +76,13 @@ export async function transitionAccountTx(
   }
 
   const terminal = isTerminal(to);
+  let removedMembers: { group_id: string; platform_user_id: string }[] = [];
   if (terminal) {
-    await client.query("DELETE FROM group_members WHERE account_id = $1", [accountId]);
+    const { rows } = await client.query<{ group_id: string; platform_user_id: string }>(
+      "DELETE FROM group_members WHERE account_id = $1 RETURNING group_id, platform_user_id",
+      [accountId],
+    );
+    removedMembers = rows;
     const { rows: cancelled } = await client.query<{ client_msg_id: string }>(
       `UPDATE messages
           SET delivery_status = 'cancelled', fail_code = 'ACCOUNT_TERMINAL'
@@ -99,6 +104,15 @@ export async function transitionAccountTx(
   await emitWs(client, "account_status_changed", { accountId, from: expectedFrom, to });
   if (terminal) {
     await emitWs(client, "account_terminal", { accountId, status: to });
+    // Mirror what the gateway-driven member_left events produce so the ws
+    // sequence is identical regardless of how the terminal state arrived.
+    for (const m of removedMembers) {
+      await emitWs(client, "member_changed", {
+        groupId: m.group_id,
+        platformUserId: m.platform_user_id,
+        change: "left",
+      });
+    }
   }
   return updated;
 }
@@ -122,7 +136,10 @@ export async function transitionAccount(
     client.release();
   }
 
-  if (opts.to === "idle" || opts.to === "disconnected") {
+  // Leaving the connected states drops the gateway-side connection. For
+  // terminal states the gateway will push its own member_left events; the
+  // consumer dedupes them because the cascade already removed the rows.
+  if (opts.to === "idle" || opts.to === "disconnected" || isTerminal(opts.to)) {
     try {
       await gateway.disconnect(opts.accountId);
     } catch (err) {

@@ -44,7 +44,9 @@ const LEAVE_WAIT_MS = 5000;
 
 function gwCode(err: unknown): string {
   if (err instanceof GatewayError) return err.code;
-  return "NETWORK_TIMEOUT";
+  // Not a gateway failure at all (e.g. a local DB constraint violation):
+  // do not disguise it as NETWORK_TIMEOUT.
+  return "INTERNAL";
 }
 
 async function finishJob(
@@ -105,14 +107,22 @@ async function stepCreateGroup(ctx: AppContext, job: JobRow): Promise<void> {
   switch (state.phase) {
     case "create": {
       try {
-        const { groupId } = await ctx.gateway.createGroup(job.state.creatorAccountId as string);
-        state.gatewayGroupId = groupId;
+        if (!state.gatewayGroupId) {
+          const { groupId } = await ctx.gateway.createGroup(
+            job.state.creatorAccountId as string,
+          );
+          state.gatewayGroupId = groupId;
+          // Persist the gateway handle first: a crash after createGroup
+          // returns but before the state lands would otherwise create a
+          // duplicate gateway group on resume.
+          await saveState(ctx, job.id, state, errors, null);
+        }
         const client = await ctx.pool.connect();
         try {
           await client.query("BEGIN");
           await client.query(
             "UPDATE groups SET gateway_group_id=$2, status='active' WHERE id=$1",
-            [job.group_id, groupId],
+            [job.group_id, state.gatewayGroupId],
           );
           const { rows: acc } = await client.query<{ platform_user_id: string }>(
             "SELECT platform_user_id FROM accounts WHERE id=$1",
@@ -136,6 +146,7 @@ async function stepCreateGroup(ctx: AppContext, job: JobRow): Promise<void> {
         }
         state.phase = "invite";
       } catch (err) {
+        ctx.log.warn({ err, jobId: job.id, step: "create" }, "create_group step failed");
         errors.push({ step: "create", code: gwCode(err) });
         return finishJob(ctx, job, errors);
       }
@@ -395,7 +406,7 @@ async function stepLeaveAll(ctx: AppContext, job: JobRow): Promise<void> {
           client.release();
         }
       } catch (err) {
-        errors.push({ step: "reconcile", code: gwCode(err) });
+        errors.push({ step: "leave:reconcile", code: gwCode(err) });
       }
       state.phase = "done";
       return saveState(ctx, job.id, state, errors, null);

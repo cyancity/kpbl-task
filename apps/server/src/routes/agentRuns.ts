@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { AppError } from "../errors.js";
+import { AppError, requireUuid } from "../errors.js";
 import type { AppContext } from "../context.js";
 
 function stepView(s: {
@@ -31,6 +31,7 @@ function stepView(s: {
 export function registerAgentRunRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get("/api/agent-runs/:id", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "AGENT_RUN_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       group_id: string;
@@ -63,6 +64,7 @@ export function registerAgentRunRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.get("/api/groups/:id/agent-runs", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       group_id: string;
@@ -89,6 +91,7 @@ export function registerAgentRunRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post("/api/agent-runs/:id/cancel", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "AGENT_RUN_NOT_FOUND");
     const { rowCount } = await ctx.pool.query(
       "UPDATE agent_runs SET cancel_requested=true WHERE id=$1 AND status='running'",
       [id],

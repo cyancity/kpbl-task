@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AppError } from "../errors.js";
+import { AppError, requireUuid } from "../errors.js";
 import type { AppContext } from "../context.js";
 import { resolveSequence, UnresolvedPlaceholder } from "../domain/sequences/resolve.js";
 import { startSequenceRun } from "../domain/sequences/engine.js";
@@ -110,6 +110,7 @@ export function registerSequenceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.get("/api/sequences/:id", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "SEQUENCE_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       name: string;
@@ -127,6 +128,7 @@ export function registerSequenceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post("/api/sequences/:id/resolve", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "SEQUENCE_NOT_FOUND");
     const body = varsSchema.parse(req.body);
     const { rows } = await ctx.pool.query<{ steps: { index: number; text: string }[] }>(
       "SELECT steps FROM sequences WHERE id=$1",
@@ -142,6 +144,7 @@ export function registerSequenceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post("/api/groups/:id/sequence-runs", async (req, reply) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const body = startRunSchema.parse(req.body);
     const result = await startSequenceRun(ctx, {
       groupId: id,
@@ -154,6 +157,7 @@ export function registerSequenceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.get("/api/sequence-runs/:id", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "SEQUENCE_RUN_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       group_id: string;
@@ -182,6 +186,7 @@ export function registerSequenceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.get("/api/groups/:id/sequence-runs", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       group_id: string;

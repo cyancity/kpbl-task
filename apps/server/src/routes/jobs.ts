@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AppError } from "../errors.js";
+import { AppError, requireUuid } from "../errors.js";
 import { initialCreateGroupState, initialLeaveAllState } from "../domain/jobs/engine.js";
 import type { AppContext } from "../context.js";
 
@@ -69,6 +69,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.post("/api/groups/:id/leave-all", async (req, reply) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       status: string;
       gateway_group_id: string | null;
@@ -95,6 +96,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.get("/api/jobs/:jobId", async (req) => {
     const { jobId } = req.params as { jobId: string };
+    requireUuid(jobId, "JOB_NOT_FOUND");
     const { rows } = await ctx.pool.query<{
       id: string;
       kind: string;

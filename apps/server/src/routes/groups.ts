@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import pg from "pg";
-import { AppError } from "../errors.js";
+import { AppError, requireUuid } from "../errors.js";
 import { sendToGroup } from "../domain/messages/outbox.js";
 import type { AppContext } from "../context.js";
 
@@ -75,6 +75,7 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
 
   app.get("/api/groups/:id", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const view = await groupView(ctx.pool, id);
     if (!view) throw new AppError(404, "GROUP_NOT_FOUND", `group ${id} not found`);
     return view;
@@ -82,6 +83,7 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
 
   app.patch("/api/groups/:id", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const body = patchSchema.parse(req.body);
     const { rowCount } = await ctx.pool.query(
       `UPDATE groups SET
@@ -96,6 +98,7 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
 
   app.post("/api/groups/:id/send", async (req, reply) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const body = sendSchema.parse(req.body);
     const result = await sendToGroup(ctx.pool, id, body.accountId, body.text);
     return reply.code(202).send(result);
@@ -103,6 +106,7 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
 
   app.get("/api/groups/:id/messages", async (req) => {
     const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
     const q = req.query as { before?: string; limit?: string };
     const limit = Math.min(Math.max(Number(q.limit ?? 50) || 50, 1), 200);
 
@@ -144,7 +148,9 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
       isOwn: r.is_own,
       text: r.text,
       sentAt: r.sent_at.toISOString(),
-      deliveryStatus: r.delivery_status,
+      // 'sending' is an internal transient state; the API enum exposes it as
+      // 'queued' (the message is still in the outbound pipeline).
+      deliveryStatus: r.delivery_status === "sending" ? "queued" : r.delivery_status,
       failCode: r.fail_code,
     }));
     const last = rows[Math.min(items.length, limit) - 1];
