@@ -8,7 +8,11 @@ import SequencePanel from "../components/SequencePanel";
 
 function Timeline({ groupId }: { groupId: string }) {
   const [pages, setPages] = useState<MessageItem[][]>([]);
-  const [extra, setExtra] = useState<MessageItem[]>([]);
+  // Cursor of the oldest loaded page; undefined = "not started paging yet",
+  // so the first-page nextCursor is used. A null value means history is
+  // exhausted and the button hides.
+  const [olderCursor, setOlderCursor] = useState<string | null | undefined>(undefined);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { data } = useQuery({
     queryKey: ["timeline", groupId],
@@ -23,7 +27,7 @@ function Timeline({ groupId }: { groupId: string }) {
 
   const items = useMemo(() => {
     const first = data?.items ?? [];
-    const all = [...extra, ...pages.flat(), ...first];
+    const all = [...pages.flat(), ...first];
     const seen = new Set<string>();
     return all
       .filter((m) => {
@@ -33,26 +37,36 @@ function Timeline({ groupId }: { groupId: string }) {
         return true;
       })
       .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
-  }, [data, pages, extra]);
+  }, [data, pages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView();
   }, [items.length]);
 
+  const effectiveCursor = olderCursor === undefined ? (data?.nextCursor ?? null) : olderCursor;
+
   const loadOlder = async () => {
-    if (!data?.nextCursor) return;
-    const res = (await apiFetch(
-      `/api/groups/${groupId}/messages?limit=50&before=${encodeURIComponent(data.nextCursor)}`,
-    )) as { items: MessageItem[] };
-    setPages((p) => [...p, res.items]);
-    // older pages append at the front (they're older)
-    setExtra((x) => x);
+    const cursor = effectiveCursor;
+    if (!cursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const res = (await apiFetch(
+        `/api/groups/${groupId}/messages?limit=50&before=${encodeURIComponent(cursor)}`,
+      )) as { items: MessageItem[]; nextCursor: string | null };
+      // Older pages append at the front; advance the cursor to this page's
+      // nextCursor so the next click continues further back instead of
+      // refetching the same page.
+      setPages((p) => [...p, res.items]);
+      setOlderCursor(res.nextCursor);
+    } finally {
+      setLoadingOlder(false);
+    }
   };
 
   return (
     <div className="timeline card">
-      {data?.nextCursor && (
-        <button className="link" onClick={() => void loadOlder()}>
+      {effectiveCursor && (
+        <button className="link" disabled={loadingOlder} onClick={() => void loadOlder()}>
           加载更早
         </button>
       )}

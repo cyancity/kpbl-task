@@ -78,7 +78,10 @@ export async function apiFetch(
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(path, { ...init, headers });
-  if (res.status === 401 && !retried) {
+  // Auth endpoints authenticate themselves: a 401 from login means bad
+  // credentials, not an expired session — refreshing there would mask the
+  // real error and churn the refresh cookie.
+  if (res.status === 401 && !retried && !path.startsWith("/api/auth/")) {
     if (await refreshToken()) return apiFetch(path, init, true);
     setAccessToken(null);
     onAuthExpired();
