@@ -7,9 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n gateway,server \"npm run dev -w apps/mock-gateway\" \"npm run dev -w apps/server\"",
-    "build": "npm run build -w packages/shared && npm run build -w apps/mock-gateway && npm run build -w apps/server",
-    "test": "npm test -w apps/server",
+    "dev": "npm run migrate -w apps/server && concurrently -n gateway,agent,server,web \"npm run dev -w apps/mock-gateway\" \"npm run dev -w apps/mock-agent\" \"npm run dev -w apps/server\" \"npm run dev -w apps/web\"",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test -w apps/server && npm test -w apps/web",
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "npm run typecheck --workspaces --if-present"

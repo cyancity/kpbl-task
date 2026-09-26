@@ -1,0 +1,272 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+  background: #f5f6f8;
+  color: #1d2129;
+}
+main {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e5e6eb;
+}
+.topbar .brand {
+  font-weight: 700;
+}
+.topbar nav a {
+  margin-right: 12px;
+  color: #165dff;
+  text-decoration: none;
+}
+.topbar .spacer {
+  flex: 1;
+}
+h1 {
+  font-size: 22px;
+}
+h3 {
+  margin-top: 24px;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: #fff;
+  margin: 8px 0;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e5e6eb;
+  font-size: 14px;
+  vertical-align: top;
+}
+.card {
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  padding: 16px;
+  margin: 8px 0;
+}
+.card.inner {
+  background: #fafbfc;
+}
+.card.blocked {
+  border-color: #f53f3f;
+}
+button {
+  padding: 5px 12px;
+  border: 1px solid #c9cdd4;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button.link {
+  border: none;
+  color: #165dff;
+  padding: 0 4px;
+}
+input,
+select {
+  padding: 5px 8px;
+  border: 1px solid #c9cdd4;
+  border-radius: 4px;
+  font-size: 13px;
+}
+label {
+  display: block;
+  margin: 8px 0;
+  font-size: 13px;
+}
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 14px;
+}
+fieldset {
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: #e8eaf0;
+}
+.status-online,
+.status-active,
+.status-sent,
+.status-finished {
+  background: #dcf5e7;
+  color: #0a7a3f;
+}
+.status-rate_limited,
+.status-creating,
+.status-queued,
+.status-sending,
+.status-running,
+.status-accepted,
+.status-pending {
+  background: #fff3e8;
+  color: #b45e06;
+}
+.status-disconnected,
+.status-left,
+.status-cancelled {
+  background: #e8eaf0;
+  color: #4e5969;
+}
+.status-suspended,
+.status-session_expired,
+.status-unreachable,
+.status-failed,
+.status-blocked,
+.status-skipped,
+.status-unknown {
+  background: #ffece8;
+  color: #cb2634;
+}
+.status-idle {
+  background: #e8eaf0;
+}
+.status-stopped {
+  background: #ffece8;
+  color: #cb2634;
+}
+.error-banner {
+  background: #ffece8;
+  border: 1px solid #f53f3f;
+  color: #cb2634;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+.error-text {
+  color: #cb2634;
+}
+.row-error {
+  background: #fff5f4;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.timeline .messages {
+  max-height: 420px;
+  overflow-y: auto;
+}
+.msg {
+  padding: 4px 0;
+  font-size: 14px;
+}
+.msg .sender {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.msg.own .sender {
+  color: #165dff;
+}
+.msg .meta {
+  margin-left: 8px;
+  color: #86909c;
+  font-size: 12px;
+}
+.send-box {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.send-box input {
+  flex: 1;
+}
+.step-row {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0;
+  align-items: center;
+}
+.step-row input {
+  flex: 1;
+}
+.step-row input.idx {
+  max-width: 60px;
+  flex: none;
+}
+.step-row input.delay {
+  max-width: 80px;
+  flex: none;
+}
+.actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.header-card {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.raw {
+  background: #f2f3f5;
+  padding: 10px;
+  border-radius: 4px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+.login-page {
+  display: flex;
+  justify-content: center;
+  padding-top: 120px;
+}
+.login-card {
+  width: 320px;
+}
+.login-card input {
+  width: 100%;
+  margin-top: 4px;
+}
+.login-card button {
+  width: 100%;
+  margin-top: 12px;
+}
+.job-status {
+  font-size: 13px;
+  margin-top: 8px;
+}
+.preview-step {
+  margin: 6px 0;
+}
+.preview-step .vars {
+  color: #86909c;
+  font-size: 12px;
+}
+.preview-step .vars span {
+  margin-right: 10px;
+}
