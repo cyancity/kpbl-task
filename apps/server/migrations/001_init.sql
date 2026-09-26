@@ -1,11 +1,11 @@
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id serial PRIMARY KEY,
   username text UNIQUE NOT NULL,
   password_hash text NOT NULL,
   role text NOT NULL CHECK (role IN ('admin','viewer'))
 );
 
-CREATE TABLE auth_sessions (
+CREATE TABLE IF NOT EXISTS auth_sessions (
   id uuid PRIMARY KEY,
   user_id int NOT NULL REFERENCES users(id),
   family_id uuid NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE auth_sessions (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE refresh_tokens (
+CREATE TABLE IF NOT EXISTS refresh_tokens (
   id uuid PRIMARY KEY,
   session_id uuid NOT NULL REFERENCES auth_sessions(id),
   token_hash text UNIQUE NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE refresh_tokens (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE accounts (
+CREATE TABLE IF NOT EXISTS accounts (
   id text PRIMARY KEY,
   status text NOT NULL CHECK (status IN ('idle','online','rate_limited','disconnected','suspended','session_expired')),
   platform_user_id text NULL,
@@ -31,7 +31,7 @@ CREATE TABLE accounts (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE groups (
+CREATE TABLE IF NOT EXISTS groups (
   id uuid PRIMARY KEY,
   gateway_group_id text UNIQUE NULL,
   status text NOT NULL CHECK (status IN ('creating','active','unreachable','left')),
@@ -41,7 +41,7 @@ CREATE TABLE groups (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE group_members (
+CREATE TABLE IF NOT EXISTS group_members (
   group_id uuid NOT NULL REFERENCES groups(id),
   account_id text NULL REFERENCES accounts(id),
   platform_user_id text NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE group_members (
   PRIMARY KEY (group_id, platform_user_id)
 );
 
-CREATE TABLE messages (
+CREATE TABLE IF NOT EXISTS messages (
   id bigserial PRIMARY KEY,
   group_id uuid NOT NULL REFERENCES groups(id),
   msg_id text NULL,
@@ -73,19 +73,19 @@ CREATE TABLE messages (
   UNIQUE (group_id, msg_id)
 );
 
-CREATE TABLE gateway_events (
+CREATE TABLE IF NOT EXISTS gateway_events (
   event_id bigint PRIMARY KEY,
   type text NOT NULL,
   payload jsonb NOT NULL,
   received_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE gateway_cursor (
+CREATE TABLE IF NOT EXISTS gateway_cursor (
   id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   watermark bigint NOT NULL DEFAULT 0
 );
 
-CREATE TABLE dead_events (
+CREATE TABLE IF NOT EXISTS dead_events (
   id bigserial PRIMARY KEY,
   event_id bigint NOT NULL,
   type text NOT NULL,
@@ -94,14 +94,14 @@ CREATE TABLE dead_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE ws_events (
+CREATE TABLE IF NOT EXISTS ws_events (
   seq bigserial PRIMARY KEY,
   type text NOT NULL,
   payload jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE jobs (
+CREATE TABLE IF NOT EXISTS jobs (
   id uuid PRIMARY KEY,
   kind text NOT NULL,
   group_id uuid,
@@ -112,14 +112,14 @@ CREATE TABLE jobs (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE sequences (
+CREATE TABLE IF NOT EXISTS sequences (
   id uuid PRIMARY KEY,
   name text NOT NULL,
   steps jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE sequence_runs (
+CREATE TABLE IF NOT EXISTS sequence_runs (
   id uuid PRIMARY KEY,
   group_id uuid NOT NULL REFERENCES groups(id),
   sequence_id uuid NOT NULL REFERENCES sequences(id),
@@ -130,9 +130,9 @@ CREATE TABLE sequence_runs (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX sequence_runs_one_running ON sequence_runs (group_id) WHERE status = 'running';
+CREATE UNIQUE INDEX IF NOT EXISTS sequence_runs_one_running ON sequence_runs (group_id) WHERE status = 'running';
 
-CREATE TABLE sequence_run_steps (
+CREATE TABLE IF NOT EXISTS sequence_run_steps (
   id uuid PRIMARY KEY,
   run_id uuid NOT NULL REFERENCES sequence_runs(id),
   index int NOT NULL,
@@ -146,7 +146,7 @@ CREATE TABLE sequence_run_steps (
   UNIQUE (run_id, index)
 );
 
-CREATE TABLE agent_runs (
+CREATE TABLE IF NOT EXISTS agent_runs (
   id uuid PRIMARY KEY,
   group_id uuid NOT NULL REFERENCES groups(id),
   status text NOT NULL CHECK (status IN ('running','finished','failed','blocked','cancelled')),
@@ -162,9 +162,9 @@ CREATE TABLE agent_runs (
   created_at timestamptz NOT NULL DEFAULT now(),
   ended_at timestamptz NULL
 );
-CREATE UNIQUE INDEX agent_runs_one_running ON agent_runs (group_id) WHERE status = 'running';
+CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_one_running ON agent_runs (group_id) WHERE status = 'running';
 
-CREATE TABLE agent_steps (
+CREATE TABLE IF NOT EXISTS agent_steps (
   id uuid PRIMARY KEY,
   run_id uuid NOT NULL REFERENCES agent_runs(id),
   seq int NOT NULL,
@@ -183,14 +183,14 @@ CREATE TABLE agent_steps (
   UNIQUE (run_id, seq)
 );
 
-CREATE TABLE agent_pending_messages (
+CREATE TABLE IF NOT EXISTS agent_pending_messages (
   run_group_id uuid NOT NULL,
   message_pk bigint NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (run_group_id, message_pk)
 );
 
-CREATE TABLE agent_idempotency (
+CREATE TABLE IF NOT EXISTS agent_idempotency (
   run_id uuid NOT NULL,
   key text NOT NULL,
   client_msg_id uuid NOT NULL,
