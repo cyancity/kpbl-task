@@ -63,6 +63,7 @@ interface AccountState {
   terminal: "suspended" | "session_expired" | null;
   rateLimitedUntil: number;
   injected: InjectRule[];
+  sendCalls: number;
 }
 
 interface Invite {
@@ -138,6 +139,7 @@ class MockGateway {
         terminal: null,
         rateLimitedUntil: 0,
         injected: [],
+        sendCalls: 0,
       };
       this.accounts.set(id, a);
     }
@@ -173,11 +175,11 @@ class MockGateway {
       `id: ${record.eventId}\n` +
       `event: ${record.type}\n` +
       `data: ${JSON.stringify(record.data)}\n\n`;
+    // Always write: delivery is at-least-once and may be out of order; the
+    // consumer is responsible for deduplication.
     for (const client of this.sseClients) {
-      if (record.eventId > client.lastSent) {
-        client.reply.raw.write(frame);
-        client.lastSent = record.eventId;
-      }
+      client.reply.raw.write(frame);
+      client.lastSent = Math.max(client.lastSent, record.eventId);
     }
   }
 
@@ -452,6 +454,7 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
     if (!group) return err(reply, 404, "GROUP_NOT_FOUND");
     if (!accountId || !clientMsgId) return err(reply, 400, "BAD_REQUEST");
     const a = gw.account(accountId);
+    a.sendCalls += 1;
     if (a.terminal === "suspended") return err(reply, 403, "ACCOUNT_SUSPENDED");
     if (a.terminal === "session_expired") return err(reply, 401, "SESSION_EXPIRED");
     if (!a.connected) return err(reply, 409, "ACCOUNT_OFFLINE");

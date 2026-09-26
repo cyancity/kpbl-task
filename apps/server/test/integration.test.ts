@@ -6,10 +6,8 @@ import {
   stopTestEnv,
   login,
   auth,
-  TEST_DB_URL,
   type TestEnv,
 } from "./helpers.js";
-import { createPool } from "../src/db/pool.js";
 import { checkSchemaVersion, runMigrations } from "../src/db/migrate.js";
 import { enterTerminal } from "../src/domain/accounts/service.js";
 import { GatewayClient } from "../src/gateway/client.js";
@@ -125,7 +123,7 @@ describe("health & schema", () => {
   it("health returns schemaVersion", async () => {
     const res = await env.app.inject({ url: "/api/health" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, schemaVersion: 2 });
+    expect(res.json()).toMatchObject({ ok: true, schemaVersion: 3 });
   });
 
   it("migration re-run is a no-op", async () => {
@@ -135,13 +133,13 @@ describe("health & schema", () => {
 
   it("checkSchemaVersion reports behind / current", async () => {
     expect(await checkSchemaVersion(env.pool)).toBeNull();
-    await env.pool.query("DELETE FROM schema_migrations WHERE version = 2");
+    await env.pool.query("DELETE FROM schema_migrations WHERE version = 3");
     const behind = await checkSchemaVersion(env.pool);
-    expect(behind).toEqual({ current: 1, expected: 2 });
-    // restore
-    const pool = createPool(TEST_DB_URL);
-    await runMigrations(pool);
-    await pool.end();
+    expect(behind).toEqual({ current: 2, expected: 3 });
+    // restore bookkeeping without re-running the DDL
+    await env.pool.query(
+      "INSERT INTO schema_migrations (version, name) VALUES (3, '003_outbox.sql')",
+    );
   });
 });
 
