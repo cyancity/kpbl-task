@@ -12,7 +12,9 @@
     "test": "npm test -w apps/server && npm test -w apps/web",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:adversarial": "npm run test:adversarial -w apps/server",
+    "test:e2e": "npm run test:e2e -w apps/web"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
