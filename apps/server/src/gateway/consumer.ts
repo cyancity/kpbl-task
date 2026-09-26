@@ -235,7 +235,7 @@ async function dispatch(ctx: AppContext, client: pg.PoolClient, ev: SseEvent): P
   const d = ev.data;
   switch (ev.type) {
     case "message":
-      return onMessage(ctx, client, d);
+      return onMessage(ctx, client, ev);
     case "message_sent":
       return onMessageSent(ctx, client, d);
     case "message_failed":
@@ -252,10 +252,23 @@ async function dispatch(ctx: AppContext, client: pg.PoolClient, ev: SseEvent): P
 async function onMessage(
   ctx: AppContext,
   client: pg.PoolClient,
-  d: Record<string, unknown>,
+  ev: SseEvent,
 ): Promise<void> {
+  const d = ev.data;
   const groupId = await groupByGatewayId(client, String(d.groupId));
   if (!groupId) {
+    // The event must not be silently dropped: park it in dead_events and
+    // surface it so an operator can see a message arrived for a group we do
+    // not know (e.g. it raced ahead of the create-group job).
+    await client.query(
+      "INSERT INTO dead_events (event_id, type, payload, error) VALUES ($1,$2,$3,$4)",
+      [ev.id, ev.type, JSON.stringify(ev.data), "message for unknown group"],
+    );
+    await emitWs(client, "inconsistency", {
+      kind: "unknown_group",
+      ref: d.groupId,
+      message: "message event for unknown group",
+    });
     ctx.log.warn({ data: d }, "message event for unknown group");
     return;
   }
@@ -421,11 +434,15 @@ async function onMemberLeft(
   const groupId = await groupByGatewayId(client, String(d.groupId));
   if (!groupId) return;
   const platformUserId = String(d.platformUserId);
-  await client.query("DELETE FROM group_members WHERE group_id=$1 AND platform_user_id=$2", [
-    groupId,
-    platformUserId,
-  ]);
-  await emitWs(client, "member_changed", { groupId, platformUserId, change: "left" });
+  // rowCount=0 means the terminal cascade already removed the member and
+  // emitted member_changed — do not emit a duplicate.
+  const { rowCount } = await client.query(
+    "DELETE FROM group_members WHERE group_id=$1 AND platform_user_id=$2",
+    [groupId, platformUserId],
+  );
+  if (rowCount) {
+    await emitWs(client, "member_changed", { groupId, platformUserId, change: "left" });
+  }
 }
 
 async function onAccountStatus(

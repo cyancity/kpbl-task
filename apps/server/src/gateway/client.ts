@@ -12,19 +12,40 @@ export class GatewayError extends Error {
 interface GatewayRequestOptions {
   method?: string;
   body?: unknown;
+  timeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 8_000;
+const SEND_TIMEOUT_MS = 10_000;
 
 export class GatewayClient {
   constructor(private readonly baseUrl: string) {}
 
   private async request<T>(path: string, opts: GatewayRequestOptions = {}): Promise<T> {
-    const init: RequestInit = { method: opts.method ?? "GET" };
+    const init: RequestInit = {
+      method: opts.method ?? "GET",
+      // A hung gateway call must not block a worker forever; the caller treats
+      // NETWORK_TIMEOUT as "outcome unknown" and reconciles instead of resending.
+      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    };
     if (opts.body !== undefined) {
       init.headers = { "content-type": "application/json" };
       init.body = JSON.stringify(opts.body);
     }
-    const res = await fetch(`${this.baseUrl}${path}`, init);
-    const text = await res.text();
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, init);
+    } catch {
+      // AbortError (timeout) and TypeError (network failure): outcome unknown.
+      throw new GatewayError(0, "NETWORK_TIMEOUT", null);
+    }
+    let text: string;
+    try {
+      text = await res.text();
+    } catch {
+      // Body stream failed (connection dropped mid-response).
+      throw new GatewayError(0, "NETWORK_TIMEOUT", null);
+    }
     let json: unknown = null;
     try {
       json = text ? JSON.parse(text) : null;
@@ -104,11 +125,14 @@ export class GatewayClient {
     return this.request<{ accepted: boolean }>(`/groups/${groupId}/send`, {
       method: "POST",
       body: { accountId, clientMsgId, text },
+      // Longer than the gateway's own landing window (2s) plus mock latency
+      // budget; a timeout lands in `unknown` and is reconciled, not retried.
+      timeoutMs: SEND_TIMEOUT_MS,
     });
   }
 
   messageByClientId(groupId: string, clientMsgId: string) {
-    return this.request<{ msgId: string; sentAt: string }>(
+    return this.request<{ msgId: string; sentAt: number | string }>(
       `/groups/${groupId}/messages/by-client-id/${clientMsgId}`,
     );
   }

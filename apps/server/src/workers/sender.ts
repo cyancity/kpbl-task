@@ -30,25 +30,45 @@ async function recoverStaleSending(client: pg.PoolClient): Promise<void> {
 }
 
 async function claimOne(client: pg.PoolClient): Promise<ClaimedRow | null> {
+  // Serialize claims per sender account by locking the account row. The old
+  // NOT EXISTS probe ran under the statement's snapshot, so a second instance
+  // could claim the account's next message before seeing a committed 'sending'
+  // row — two in-flight sends for one account arrived reordered at the gateway
+  // (M3). SKIP LOCKED hands different accounts to different instances; while we
+  // hold the account lock nobody else can claim for it, so FIFO holds.
+  const { rows: accs } = await client.query<{ id: string }>(
+    `SELECT a.id FROM accounts a
+      WHERE a.status = 'online'
+        AND EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.sender_account_id = a.id AND m.delivery_status = 'queued'
+        )
+      ORDER BY a.id
+      FOR UPDATE OF a SKIP LOCKED
+      LIMIT 1`,
+  );
+  const account = accs[0];
+  if (!account) return null;
+  // Fresh statement snapshot: any 'sending' row committed by a previous claimer
+  // is visible now, and none can appear while we hold the account lock.
   const { rows } = await client.query<ClaimedRow>(
     `UPDATE messages
         SET delivery_status = 'sending', sending_since = now()
       WHERE id = (
         SELECT m.id FROM messages m
-        JOIN accounts a ON a.id = m.sender_account_id
-        WHERE m.delivery_status = 'queued'
-          AND a.status = 'online'
+        WHERE m.sender_account_id = $1
+          AND m.delivery_status = 'queued'
           AND NOT EXISTS (
             SELECT 1 FROM messages s
-            WHERE s.sender_account_id = m.sender_account_id
+            WHERE s.sender_account_id = $1
               AND s.delivery_status = 'sending'
           )
         ORDER BY m.created_at ASC, m.id ASC
-        FOR UPDATE OF m SKIP LOCKED
         LIMIT 1
       )
       RETURNING id, group_id, client_msg_id, sender_account_id, sender_platform_user_id, text,
         (SELECT gateway_group_id FROM groups WHERE id = messages.group_id) AS gateway_group_id`,
+    [account.id],
   );
   return rows[0] ?? null;
 }
@@ -61,7 +81,23 @@ async function applyOutcome(
   const client = await ctx.pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM messages WHERE id = $1 FOR UPDATE", [msg.id]);
+    // Guard against stale responses: the row may have been resolved by stale
+    // recovery or a terminal cascade while the gateway call was in flight. A
+    // late response must not overwrite an already-decided delivery_status.
+    const { rows: cur } = await client.query<{ delivery_status: string }>(
+      "SELECT delivery_status FROM messages WHERE id = $1 FOR UPDATE",
+      [msg.id],
+    );
+    if (cur[0]?.delivery_status !== "sending") {
+      await client.query("COMMIT");
+      if (cur[0]) {
+        ctx.log.warn(
+          { msgId: msg.id, status: cur[0].delivery_status },
+          "dropping late send outcome",
+        );
+      }
+      return;
+    }
     await fn(client);
     await client.query("COMMIT");
   } catch (err) {
