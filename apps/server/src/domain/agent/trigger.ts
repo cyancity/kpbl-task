@@ -50,6 +50,55 @@ export async function onInboundMessageTrigger(
   } catch (err) {
     await client.query("ROLLBACK TO SAVEPOINT agent_trigger");
     if ((err as { code?: string }).code !== "23505") throw err;
+    // The 23505 wait resolves only after the conflicting transaction ends, so
+    // this SELECT sees a fresh snapshot. If that run has already ended, its
+    // pending-message handoff already ran — parking this row in
+    // agent_pending_messages would orphan it forever.
+    const { rows: running } = await client.query<{ id: string }>(
+      "SELECT id FROM agent_runs WHERE group_id=$1 AND status='running'",
+      [row.group_id],
+    );
+    if (!running[0]) {
+      const { rows: stranded } = await client.query<{ message_pk: number }>(
+        "DELETE FROM agent_pending_messages WHERE run_group_id=$1 RETURNING message_pk",
+        [row.group_id],
+      );
+      const ids = [...stranded.map((p) => p.message_pk), row.id];
+      const { rows: msgs } = await client.query<{
+        msg_id: string | null;
+        sender_platform_user_id: string | null;
+        text: string | null;
+        sent_at: Date;
+      }>(
+        "SELECT msg_id, sender_platform_user_id, text, sent_at FROM messages WHERE id = ANY($1) ORDER BY sent_at, id",
+        [ids],
+      );
+      const triggerMessages = msgs.map(rowToTriggerMessage);
+      await client.query("SAVEPOINT agent_trigger_retry");
+      try {
+        await client.query(
+          "INSERT INTO agent_runs (id, group_id, status, trigger_messages) VALUES ($1,$2,'running',$3)",
+          [runId, row.group_id, JSON.stringify(triggerMessages)],
+        );
+        await client.query("RELEASE SAVEPOINT agent_trigger_retry");
+      } catch (retryErr) {
+        await client.query("ROLLBACK TO SAVEPOINT agent_trigger_retry");
+        if ((retryErr as { code?: string }).code !== "23505") throw retryErr;
+        // A new run appeared in the meantime — it will consume the pending row.
+        await client.query(
+          "INSERT INTO agent_pending_messages (run_group_id, message_pk) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+          [row.group_id, row.id],
+        );
+        return;
+      }
+      await emitWs(client, "agent_run", {
+        runId,
+        groupId: row.group_id,
+        status: "running",
+        endReason: null,
+      });
+      return;
+    }
     await client.query(
       "INSERT INTO agent_pending_messages (run_group_id, message_pk) VALUES ($1,$2) ON CONFLICT DO NOTHING",
       [row.group_id, row.id],

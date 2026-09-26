@@ -36,6 +36,13 @@ interface AgentRun {
     getRecentRepeatCount?: number;
   };
   cancel_requested: boolean;
+  /**
+   * In-memory cursor for elapsed-time billing: the point up to which the
+   * current claim has already been charged into elapsed_ms. Each persistence
+   * point adds only the delta since the previous one — adding the whole
+   * claim duration at every write double-counts and fires wall_clock early.
+   */
+  billedUntil?: number;
 }
 
 interface AgentStep {
@@ -68,13 +75,14 @@ interface ToolOutcome {
 /** Claims one runnable run (SKIP LOCKED + lease) and executes one step. */
 export async function runAgentStepOnce(ctx: AppContext): Promise<boolean> {
   const { rows } = await ctx.pool.query<{ id: string }>(
-    `UPDATE agent_runs SET lease_until = now() + interval '30 seconds', resumed_at = now()
+    `UPDATE agent_runs SET lease_until = now() + $1 * interval '1 millisecond', resumed_at = now()
      WHERE id = (
        SELECT id FROM agent_runs
        WHERE status = 'running' AND (lease_until IS NULL OR lease_until < now())
        ORDER BY created_at
        FOR UPDATE SKIP LOCKED LIMIT 1
      ) RETURNING id`,
+    [ctx.config.agentLeaseMs],
   );
   if (!rows[0]) return false;
   await stepRun(ctx, rows[0].id);
@@ -84,8 +92,8 @@ export async function runAgentStepOnce(ctx: AppContext): Promise<boolean> {
 /** Loads and steps a specific run (test helper). Assumes it is claimable. */
 export async function stepAgentRun(ctx: AppContext, runId: string): Promise<void> {
   await ctx.pool.query(
-    "UPDATE agent_runs SET lease_until = now() + interval '30 seconds', resumed_at = now() WHERE id=$1",
-    [runId],
+    "UPDATE agent_runs SET lease_until = now() + $2 * interval '1 millisecond', resumed_at = now() WHERE id=$1",
+    [runId, ctx.config.agentLeaseMs],
   );
   await stepRun(ctx, runId);
 }
@@ -113,6 +121,7 @@ async function stepRun(ctx: AppContext, runId: string): Promise<void> {
   const claimStart = Date.now();
   const run = await loadRun(ctx, runId);
   if (!run || run.status !== "running") return;
+  run.billedUntil = claimStart;
 
   try {
     // Recovery: a step committed as 'executing' means we crashed mid-flight.
@@ -123,25 +132,25 @@ async function stepRun(ctx: AppContext, runId: string): Promise<void> {
     const lastStep = lastSteps[0];
     if (lastStep && lastStep.state === "executing") {
       await resolveExecutingStep(ctx, run, lastStep);
-      await persistAfterStep(ctx, run, claimStart);
+      await persistAfterStep(ctx, run);
       return;
     }
 
     const group = await loadGroup(ctx, run.group_id);
     if (!group || group.status !== "active" || !group.agent_enabled || run.cancel_requested) {
-      await endRun(ctx, run, claimStart, "cancelled", "cancelled");
+      await endRun(ctx, run, "cancelled", "cancelled");
       return;
     }
     if (run.step_count >= STEP_BUDGET) {
-      await endRun(ctx, run, claimStart, "failed", "budget_exhausted");
+      await endRun(ctx, run, "failed", "budget_exhausted");
       return;
     }
     if (run.elapsed_ms >= WALL_CLOCK_MS) {
-      await endRun(ctx, run, claimStart, "failed", "wall_clock");
+      await endRun(ctx, run, "failed", "wall_clock");
       return;
     }
 
-    await executeTurn(ctx, run, group, claimStart);
+    await executeTurn(ctx, run, group);
   } catch (err) {
     // Release the lease so a later claim can resume from persisted state.
     await ctx.pool
@@ -182,7 +191,6 @@ async function executeTurn(
     auto_kick_enabled: boolean;
     gateway_group_id: string | null;
   },
-  claimStart: number,
 ): Promise<void> {
   const { rows: ownRows } = await ctx.pool.query<{ platform_user_id: string }>(
     "SELECT platform_user_id FROM group_members WHERE group_id=$1 AND account_id IS NOT NULL",
@@ -248,7 +256,7 @@ async function executeTurn(
   }
 
   if (protocolError) {
-    await recordProtocolError(ctx, run, protocolError, rawResponse, claimStart);
+    await recordProtocolError(ctx, run, protocolError, rawResponse);
     return;
   }
 
@@ -259,14 +267,26 @@ async function executeTurn(
 
   if (sr === "end_turn") {
     const text = typeof block.text === "string" ? block.text : "";
-    await insertStep(ctx.pool, run, {
-      seq: run.step_count,
-      kind: "final",
-      resultSummary: text.slice(0, RESULT_SUMMARY_MAX),
-      state: "done",
-    });
-    await persistAfterStep(ctx, run, claimStart);
-    await endRun(ctx, run, claimStart, "finished", "final", text);
+    // Step row and terminal run state commit together: a crash between them
+    // would leave step_count behind the steps table and wedge the run on the
+    // (run_id, seq) unique index at recovery.
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await insertStep(client, run, {
+        seq: run.step_count,
+        kind: "final",
+        resultSummary: text.slice(0, RESULT_SUMMARY_MAX),
+        state: "done",
+      });
+      await endRunTx(client, run, "finished", "final", text);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -276,11 +296,12 @@ async function executeTurn(
   const toolUseId = String(block.id);
 
   if (name === "send_message" || name === "kick_user") {
-    await executeMutatingTool(ctx, run, group, { id: toolUseId, name, input }, claimStart);
+    await executeMutatingTool(ctx, run, group, { id: toolUseId, name, input });
     return;
   }
 
-  // Read-only / final tools: assistant block + step + tool_result in one tx.
+  // Read-only / final tools: assistant block + step + tool_result + run state
+  // in one tx (same crash-safety argument as end_turn above).
   const outcome = await dispatchReadOnlyTool(ctx, run, group, name, input);
   const client = await ctx.pool.connect();
   try {
@@ -301,6 +322,17 @@ async function executeTurn(
       resultSummary: outcome.resultSummary,
       state: "done",
     });
+    if (outcome.endRun) {
+      await endRunTx(
+        client,
+        run,
+        outcome.endRun.status,
+        outcome.endRun.endReason,
+        outcome.endRun.summary,
+      );
+    } else {
+      await persistRunTx(client, run, { releaseLease: true });
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -309,18 +341,8 @@ async function executeTurn(
     client.release();
   }
 
-  await persistAfterStep(ctx, run, claimStart);
-  if (outcome.endRun) {
-    await endRun(
-      ctx,
-      run,
-      claimStart,
-      outcome.endRun.status,
-      outcome.endRun.endReason,
-      outcome.endRun.summary,
-    );
-  } else {
-    await maybeCancelAfterStep(ctx, run, claimStart);
+  if (!outcome.endRun) {
+    await maybeCancelAfterStep(ctx, run);
   }
 }
 
@@ -341,7 +363,6 @@ async function recordProtocolError(
   run: AgentRun,
   code: string,
   rawResponse: string,
-  claimStart: number,
 ): Promise<void> {
   run.step_count += 1;
   run.consecutive_protocol_errors += 1;
@@ -360,16 +381,18 @@ async function recordProtocolError(
       rawResponse,
       state: "done",
     });
+    // Step row and run state must commit together (crash-safety).
+    if (run.consecutive_protocol_errors >= MAX_CONSECUTIVE_PROTOCOL_ERRORS) {
+      await endRunTx(client, run, "failed", "protocol_errors");
+    } else {
+      await persistRunTx(client, run, { releaseLease: true });
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
-  }
-  await persistAfterStep(ctx, run, claimStart);
-  if (run.consecutive_protocol_errors >= MAX_CONSECUTIVE_PROTOCOL_ERRORS) {
-    await endRun(ctx, run, claimStart, "failed", "protocol_errors");
   }
 }
 
@@ -420,14 +443,35 @@ async function insertStep(
 }
 
 function toolResultMessage(toolUseId: string, outcome: ToolOutcome): ContentMessage {
-  let content = JSON.stringify(outcome.result);
-  if (content.length > TOOL_RESULT_MAX_BYTES) {
-    content = content.slice(0, TOOL_RESULT_MAX_BYTES);
-    if (!outcome.isError) {
-      content = JSON.stringify({ ...outcome.result, truncated: true }).slice(
-        0,
-        TOOL_RESULT_MAX_BYTES,
-      );
+  // The spec requires content <= 8KB and `truncated: true` on oversized
+  // results. Cutting the serialized JSON mid-string produces invalid JSON and
+  // can cut the marker itself, so shrink at the data level instead: drop
+  // trailing messages until the result fits, keeping a valid object.
+  let result = outcome.result;
+  let content = JSON.stringify(result);
+  if (Buffer.byteLength(content, "utf8") > TOOL_RESULT_MAX_BYTES) {
+    if (Array.isArray(result.messages)) {
+      const messages = [...(result.messages as unknown[])];
+      while (
+        messages.length > 0 &&
+        Buffer.byteLength(
+          JSON.stringify({ ...result, messages, truncated: true }),
+          "utf8",
+        ) > TOOL_RESULT_MAX_BYTES
+      ) {
+        messages.pop();
+      }
+      result = { ...result, messages, truncated: true };
+    } else {
+      result = {
+        truncated: true,
+        preview: content.slice(0, TOOL_RESULT_MAX_BYTES - 256),
+      };
+    }
+    content = JSON.stringify(result);
+    while (Buffer.byteLength(content, "utf8") > TOOL_RESULT_MAX_BYTES) {
+      result = { truncated: true, preview: String(result.preview ?? "").slice(0, 1024) };
+      content = JSON.stringify(result);
     }
   }
   const block: ContentBlock = { type: "tool_result", tool_use_id: toolUseId, content };
@@ -571,7 +615,6 @@ async function executeMutatingTool(
   run: AgentRun,
   group: { id: string; auto_kick_enabled: boolean; gateway_group_id: string | null },
   tool: { id: string; name: string; input: Record<string, unknown> },
-  claimStart: number,
 ): Promise<void> {
   const { id: toolUseId, name, input } = tool;
   const seq = run.step_count;
@@ -598,6 +641,18 @@ async function executeMutatingTool(
         resultSummary: outcome.resultSummary,
         state: "done",
       });
+      // Step row and run state commit together (crash-safety).
+      if (outcome.endRun) {
+        await endRunTx(
+          client,
+          run,
+          outcome.endRun.status,
+          outcome.endRun.endReason,
+          outcome.endRun.summary,
+        );
+      } else {
+        await persistRunTx(client, run, { releaseLease: true });
+      }
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -605,18 +660,8 @@ async function executeMutatingTool(
     } finally {
       client.release();
     }
-    await persistAfterStep(ctx, run, claimStart);
-    if (outcome.endRun) {
-      await endRun(
-        ctx,
-        run,
-        claimStart,
-        outcome.endRun.status,
-        outcome.endRun.endReason,
-        outcome.endRun.summary,
-      );
-    } else {
-      await maybeCancelAfterStep(ctx, run, claimStart);
+    if (!outcome.endRun) {
+      await maybeCancelAfterStep(ctx, run);
     }
   };
 
@@ -694,6 +739,7 @@ async function executeMutatingTool(
         ref: run.id,
         message: "agent audit did not produce a definite verdict",
       });
+      await endRunTx(client, run, "blocked", "audit_blocked");
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -701,8 +747,6 @@ async function executeMutatingTool(
     } finally {
       client.release();
     }
-    await persistAfterStep(ctx, run, claimStart);
-    await endRun(ctx, run, claimStart, "blocked", "audit_blocked");
     return;
   }
 
@@ -739,7 +783,7 @@ async function executeMutatingTool(
         [stepId, run.id, seq, toolUseId, name, JSON.stringify(input)],
       );
     }
-    await persistRun(client, run, claimStart);
+    await persistRunTx(client, run);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -758,17 +802,11 @@ async function executeMutatingTool(
       ? await awaitSendOutcome(ctx, clientMsgId, SEND_CONFIRM_MS)
       : await executeKick(ctx, group.id, accountId, String(input.platform_user_id));
 
-  await finalizeExecutingStep(
-    ctx,
-    run,
-    { id: stepId, tool_use_id: toolUseId } as AgentStep,
-    outcome,
-    claimStart,
-  );
+  await finalizeExecutingStep(ctx, run, { id: stepId, tool_use_id: toolUseId }, outcome);
   await ctx.pool.query("UPDATE agent_runs SET lease_until=NULL WHERE id=$1 AND status='running'", [
     run.id,
   ]);
-  await maybeCancelAfterStep(ctx, run, claimStart);
+  await maybeCancelAfterStep(ctx, run);
 }
 
 async function awaitSendOutcome(
@@ -826,7 +864,6 @@ async function finalizeExecutingStep(
   run: AgentRun,
   step: Pick<AgentStep, "id" | "tool_use_id"> & Partial<AgentStep>,
   outcome: ToolOutcome,
-  claimStart: number,
 ): Promise<void> {
   const client = await ctx.pool.connect();
   try {
@@ -837,7 +874,7 @@ async function finalizeExecutingStep(
        WHERE id=$1`,
       [step.id, outcome.resultSummary, outcome.isError, outcome.errorCode ?? null],
     );
-    await persistRun(client, run, claimStart);
+    await persistRunTx(client, run);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -876,31 +913,48 @@ async function resolveExecutingStep(
         const members = await ctx.gateway.members(group.gateway_group_id);
         absent = !members.some((m) => m.platformUserId === target);
       } catch {
-        absent = false;
+        // Gateway probe failed: keep the step 'executing' so the next claim
+        // retries the confirmation instead of recording a false verdict.
+        return;
       }
     }
     outcome = absent
       ? { result: { kicked: true }, isError: false, resultSummary: "kicked" }
       : errOutcome("NETWORK_TIMEOUT", "kick result could not be confirmed after restart");
   }
-  await finalizeExecutingStep(ctx, run, step, outcome, Date.now());
+  await finalizeExecutingStep(ctx, run, step, outcome);
 }
 
 /** After a non-ending step, external state may demand cancellation. */
-async function maybeCancelAfterStep(ctx: AppContext, run: AgentRun, claimStart: number) {
+async function maybeCancelAfterStep(ctx: AppContext, run: AgentRun) {
   const fresh = await loadRun(ctx, run.id);
   const group = await loadGroup(ctx, run.group_id);
   if (!fresh || fresh.status !== "running") return;
+  fresh.billedUntil = run.billedUntil ?? Date.now();
   if (!group || group.status !== "active" || !group.agent_enabled || fresh.cancel_requested) {
-    await endRun(ctx, fresh, claimStart, "cancelled", "cancelled");
+    await endRun(ctx, fresh, "cancelled", "cancelled");
   }
 }
 
-async function persistRun(client: pg.PoolClient, run: AgentRun, claimStart: number): Promise<void> {
-  const delta = Math.max(0, Date.now() - claimStart);
+/** Milliseconds of this claim not yet charged into elapsed_ms. */
+function billDelta(run: AgentRun): number {
+  const now = Date.now();
+  const from = run.billedUntil ?? now;
+  run.billedUntil = now;
+  return Math.max(0, now - from);
+}
+
+/** Persists run fields inside an existing transaction. */
+async function persistRunTx(
+  client: pg.PoolClient,
+  run: AgentRun,
+  opts: { releaseLease?: boolean } = {},
+): Promise<void> {
+  const delta = billDelta(run);
   await client.query(
     `UPDATE agent_runs SET history=$2, step_count=$3, consecutive_protocol_errors=$4,
        scratch=$5, elapsed_ms = elapsed_ms + $6, resumed_at=now()
+       ${opts.releaseLease ? ", lease_until=NULL" : ""}
      WHERE id=$1`,
     [
       run.id,
@@ -913,9 +967,9 @@ async function persistRun(client: pg.PoolClient, run: AgentRun, claimStart: numb
   );
 }
 
-/** Persists state after a step and releases the claim. */
-async function persistAfterStep(ctx: AppContext, run: AgentRun, claimStart: number) {
-  const delta = Math.max(0, Date.now() - claimStart);
+/** Persists state after a step and releases the claim (standalone update). */
+async function persistAfterStep(ctx: AppContext, run: AgentRun) {
+  const delta = billDelta(run);
   await ctx.pool.query(
     `UPDATE agent_runs SET history=$2, step_count=$3, consecutive_protocol_errors=$4,
        scratch=$5, elapsed_ms = elapsed_ms + $6, resumed_at=now(), lease_until=NULL
@@ -931,10 +985,94 @@ async function persistAfterStep(ctx: AppContext, run: AgentRun, claimStart: numb
   );
 }
 
+/**
+ * Terminal transition inside an existing transaction: run fields, the ws
+ * notification and the pending-message handoff to a follow-up run all commit
+ * atomically. Returns false when the run was no longer running (a concurrent
+ * path already ended it) — callers must then skip their own emits.
+ */
+async function endRunTx(
+  client: pg.PoolClient,
+  run: AgentRun,
+  status: string,
+  endReason: string,
+  summary?: string,
+): Promise<boolean> {
+  const delta = billDelta(run);
+  const { rowCount } = await client.query(
+    `UPDATE agent_runs SET status=$2, end_reason=$3, summary=COALESCE($4, summary),
+       ended_at=now(), lease_until=NULL, elapsed_ms = elapsed_ms + $5, resumed_at=now(),
+       history=$6, step_count=$7, consecutive_protocol_errors=$8, scratch=$9
+     WHERE id=$1 AND status='running'`,
+    [
+      run.id,
+      status,
+      endReason,
+      summary ?? null,
+      delta,
+      JSON.stringify(run.history),
+      run.step_count,
+      run.consecutive_protocol_errors,
+      JSON.stringify(run.scratch ?? {}),
+    ],
+  );
+  if (!rowCount) return false;
+  await emitWs(client, "agent_run", {
+    runId: run.id,
+    groupId: run.group_id,
+    status,
+    endReason,
+  });
+
+  // Chain: pending messages become the next run's triggers when the group
+  // is still active and agent-enabled; otherwise they are discarded.
+  const { rows: pending } = await client.query<{ message_pk: number }>(
+    "DELETE FROM agent_pending_messages WHERE run_group_id=$1 RETURNING message_pk",
+    [run.group_id],
+  );
+  if (pending.length > 0) {
+    const { rows: grp } = await client.query<{ ok: boolean }>(
+      "SELECT (status='active' AND agent_enabled) AS ok FROM groups WHERE id=$1",
+      [run.group_id],
+    );
+    if (grp[0]?.ok) {
+      const ids = pending.map((p) => p.message_pk);
+      const { rows: msgs } = await client.query<{
+        msg_id: string | null;
+        sender_platform_user_id: string | null;
+        text: string | null;
+        sent_at: Date;
+      }>(
+        `SELECT msg_id, sender_platform_user_id, text, sent_at FROM messages
+         WHERE id = ANY($1) ORDER BY sent_at, id`,
+        [ids],
+      );
+      const triggerMessages = msgs.map((m) => ({
+        msgId: m.msg_id,
+        senderPlatformUserId: m.sender_platform_user_id,
+        text: m.text,
+        sentAt: m.sent_at.getTime(),
+      }));
+      const nextRunId = crypto.randomUUID();
+      await client.query(
+        "INSERT INTO agent_runs (id, group_id, status, trigger_messages) VALUES ($1,$2,'running',$3)",
+        [nextRunId, run.group_id, JSON.stringify(triggerMessages)],
+      );
+      await emitWs(client, "agent_run", {
+        runId: nextRunId,
+        groupId: run.group_id,
+        status: "running",
+        endReason: null,
+      });
+    }
+  }
+  return true;
+}
+
+/** Standalone terminal transition: wraps endRunTx in its own transaction. */
 async function endRun(
   ctx: AppContext,
   run: AgentRun,
-  claimStart: number,
   status: string,
   endReason: string,
   summary?: string,
@@ -942,62 +1080,7 @@ async function endRun(
   const client = await ctx.pool.connect();
   try {
     await client.query("BEGIN");
-    const delta = Math.max(0, Date.now() - claimStart);
-    await client.query(
-      `UPDATE agent_runs SET status=$2, end_reason=$3, summary=COALESCE($4, summary),
-         ended_at=now(), lease_until=NULL, elapsed_ms = elapsed_ms + $5, resumed_at=now()
-       WHERE id=$1 AND status='running'`,
-      [run.id, status, endReason, summary ?? null, delta],
-    );
-    await emitWs(client, "agent_run", {
-      runId: run.id,
-      groupId: run.group_id,
-      status,
-      endReason,
-    });
-
-    // Chain: pending messages become the next run's triggers when the group
-    // is still active and agent-enabled; otherwise they are discarded.
-    const { rows: pending } = await client.query<{ message_pk: number }>(
-      "DELETE FROM agent_pending_messages WHERE run_group_id=$1 RETURNING message_pk",
-      [run.group_id],
-    );
-    if (pending.length > 0) {
-      const { rows: grp } = await client.query<{ ok: boolean }>(
-        "SELECT (status='active' AND agent_enabled) AS ok FROM groups WHERE id=$1",
-        [run.group_id],
-      );
-      if (grp[0]?.ok) {
-        const ids = pending.map((p) => p.message_pk);
-        const { rows: msgs } = await client.query<{
-          msg_id: string | null;
-          sender_platform_user_id: string | null;
-          text: string | null;
-          sent_at: Date;
-        }>(
-          `SELECT msg_id, sender_platform_user_id, text, sent_at FROM messages
-           WHERE id = ANY($1) ORDER BY sent_at, id`,
-          [ids],
-        );
-        const triggerMessages = msgs.map((m) => ({
-          msgId: m.msg_id,
-          senderPlatformUserId: m.sender_platform_user_id,
-          text: m.text,
-          sentAt: m.sent_at.getTime(),
-        }));
-        const nextRunId = crypto.randomUUID();
-        await client.query(
-          "INSERT INTO agent_runs (id, group_id, status, trigger_messages) VALUES ($1,$2,'running',$3)",
-          [nextRunId, run.group_id, JSON.stringify(triggerMessages)],
-        );
-        await emitWs(client, "agent_run", {
-          runId: nextRunId,
-          groupId: run.group_id,
-          status: "running",
-          endReason: null,
-        });
-      }
-    }
+    await endRunTx(client, run, status, endReason, summary);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

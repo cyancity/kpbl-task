@@ -7,6 +7,7 @@ export interface AppConfig {
   joinTimeoutMs: number;
   agentTurnTimeoutMs: number;
   auditTimeoutMs: number;
+  agentLeaseMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -23,5 +24,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     joinTimeoutMs: Number(env.JOIN_TIMEOUT_MS ?? 10_000),
     agentTurnTimeoutMs: Number(env.AGENT_TURN_TIMEOUT_MS ?? 12_000),
     auditTimeoutMs: Number(env.AUDIT_TIMEOUT_MS ?? 5_000),
+    // Must exceed one step's worst case (turn timeout + audit retries +
+    // send await) so a healthy claim is never reclaimed mid-flight.
+    agentLeaseMs: Number(env.AGENT_LEASE_MS ?? 60_000),
   };
 }

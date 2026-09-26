@@ -83,6 +83,7 @@ export async function startTestEnv(): Promise<TestEnv> {
     joinTimeoutMs: 10_000,
     agentTurnTimeoutMs: 1500,
     auditTimeoutMs: 800,
+    agentLeaseMs: 15_000,
   };
   const app = await buildApp(config);
   const pool = createPool(TEST_DB_URL);
