@@ -90,7 +90,7 @@ export async function transitionAccountTx(
       await client.query(
         `UPDATE sequence_run_steps
             SET status = 'skipped', sent_at = now()
-          WHERE client_msg_id = ANY($1::uuid[]) AND status = 'pending'`,
+          WHERE client_msg_id = ANY($1::uuid[]) AND status IN ('pending','accepted')`,
         [clientMsgIds],
       );
     }

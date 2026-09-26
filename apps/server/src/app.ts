@@ -13,6 +13,7 @@ import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerGroupRoutes } from "./routes/groups.js";
 import { registerJobRoutes } from "./routes/jobs.js";
 import { registerAgentRunRoutes } from "./routes/agentRuns.js";
+import { registerSequenceRoutes } from "./routes/sequences.js";
 import { onInboundMessageTrigger } from "./domain/agent/trigger.js";
 import { registerWsRoute } from "./ws/server.js";
 import type { AppConfig } from "./config.js";
@@ -120,6 +121,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerGroupRoutes(app, ctx);
   registerJobRoutes(app, ctx);
   registerAgentRunRoutes(app, ctx);
+  registerSequenceRoutes(app, ctx);
   registerWsRoute(app, ctx);
 
   app.addHook("onClose", async () => {

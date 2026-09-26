@@ -6,6 +6,7 @@ import { startRateLimitWorker } from "./rateLimit.js";
 import { startWsPusher } from "../ws/server.js";
 import { startJobWorker } from "./jobs.js";
 import { startAgentWorker } from "./agent.js";
+import { startSequenceWorker } from "./sequences.js";
 import type { WorkerHandle } from "./loop.js";
 
 export interface WorkersHandle {
@@ -19,6 +20,7 @@ export function startWorkers(ctx: AppContext): WorkersHandle {
     startRateLimitWorker(ctx),
     startJobWorker(ctx),
     startAgentWorker(ctx),
+    startSequenceWorker(ctx),
     startWsPusher(ctx),
     startConsumer(ctx),
   ];

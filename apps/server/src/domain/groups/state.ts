@@ -11,10 +11,18 @@ export async function markGroupUnreachable(client: pg.PoolClient, groupId: strin
     [groupId],
   );
   if (!rowCount) return;
-  await client.query(
-    "UPDATE sequence_runs SET status = 'stopped', updated_at = now() WHERE group_id = $1 AND status = 'running'",
+  const { rows: stopped } = await client.query<{ id: string }>(
+    "UPDATE sequence_runs SET status = 'stopped', updated_at = now() WHERE group_id = $1 AND status = 'running' RETURNING id",
     [groupId],
   );
+  for (const run of stopped) {
+    await emitWs(client, "sequence_run", {
+      runId: run.id,
+      groupId,
+      status: "stopped",
+      currentStepIndex: null,
+    });
+  }
   for (const hook of onGroupUnreachable) {
     await hook(client, groupId);
   }
