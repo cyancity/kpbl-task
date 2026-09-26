@@ -270,7 +270,13 @@ describe("accounts", () => {
       fail_code: "ACCOUNT_TERMINAL",
     });
     const ws = await env.pool.query("SELECT type FROM ws_events ORDER BY seq");
-    expect(ws.rows.map((r) => r.type)).toEqual(["account_status_changed", "account_terminal"]);
+    // The cascade emits member_changed for each removed row, matching the
+    // event sequence a gateway-driven member_left would produce (E7).
+    expect(ws.rows.map((r) => r.type)).toEqual([
+      "account_status_changed",
+      "account_terminal",
+      "member_changed",
+    ]);
   });
 
   it("re-marking suspended via API is ILLEGAL but enterTerminal is a no-op", async () => {

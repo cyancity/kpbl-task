@@ -74,8 +74,13 @@ export async function spawnServer(
 ): Promise<ServerHandle> {
   const port = nextPort++;
   const stderrChunks: string[] = [];
-  const proc = spawn("npx", ["tsx", "src/server.ts"], {
+  // detached: spawn the server directly (no npx wrapper) inside its own
+  // process group so kill9 can take the whole tree down — killing a wrapper
+  // alone orphans the real server, which keeps workers running against the
+  // shared adversarial DB.
+  const proc = spawn("node", ["--import", "tsx", "src/server.ts"], {
     cwd: new URL("../../", import.meta.url).pathname,
+    detached: true,
     env: {
       ...process.env,
       PORT: String(port),
@@ -86,6 +91,9 @@ export async function spawnServer(
       JOIN_TIMEOUT_MS: "8000",
       AGENT_TURN_TIMEOUT_MS: "4000",
       AUDIT_TIMEOUT_MS: "1000",
+      // Crash-recovery tests wait out the lease; keep it well under their
+      // waitFor budgets while still covering a single step's worst case.
+      AGENT_LEASE_MS: "15000",
       ...extraEnv,
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -127,9 +135,14 @@ export async function spawnServer(
 
 export function kill9(h: ServerHandle): void {
   try {
-    h.proc.kill("SIGKILL");
+    if (typeof h.proc.pid === "number") process.kill(-h.proc.pid, "SIGKILL");
+    else h.proc.kill("SIGKILL");
   } catch {
-    // already dead
+    try {
+      h.proc.kill("SIGKILL");
+    } catch {
+      // already dead
+    }
   }
 }
 
@@ -163,7 +176,7 @@ export async function api(
   const res = await fetch(`${h.base}${path}`, {
     method,
     headers: {
-      ...(token ? { authorization: `bearer ${token}` } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : null,
