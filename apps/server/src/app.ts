@@ -11,6 +11,7 @@ import { SessionRevocationCache, verifyAccessToken, type AccessClaims } from "./
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerGroupRoutes } from "./routes/groups.js";
+import { registerJobRoutes } from "./routes/jobs.js";
 import { registerWsRoute } from "./ws/server.js";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
@@ -115,6 +116,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerAuthRoutes(app, ctx);
   registerAccountRoutes(app, ctx);
   registerGroupRoutes(app, ctx);
+  registerJobRoutes(app, ctx);
   registerWsRoute(app, ctx);
 
   app.addHook("onClose", async () => {

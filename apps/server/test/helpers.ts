@@ -72,6 +72,7 @@ export async function startTestEnv(): Promise<TestEnv> {
     gatewayUrl,
     agentUrl: "http://localhost:4100",
     jwtSecret: "test-secret",
+    joinTimeoutMs: 10_000,
   };
   const app = await buildApp(config);
   const pool = createPool(TEST_DB_URL);

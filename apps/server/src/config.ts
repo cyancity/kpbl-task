@@ -4,6 +4,7 @@ export interface AppConfig {
   gatewayUrl: string;
   agentUrl: string;
   jwtSecret: string;
+  joinTimeoutMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -17,5 +18,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     gatewayUrl: env.GATEWAY_URL ?? "http://localhost:4000",
     agentUrl: env.AGENT_URL ?? "http://localhost:4100",
     jwtSecret: env.JWT_SECRET ?? "dev-secret",
+    joinTimeoutMs: Number(env.JOIN_TIMEOUT_MS ?? 10_000),
   };
 }

@@ -80,6 +80,8 @@ interface GroupState {
   inviteExpireUsed: boolean;
   writeForbidden: boolean;
   ownerLeft: boolean;
+  promoteCalls: number;
+  promoteInjected: InjectRule[];
 }
 
 interface StoredMessage {
@@ -105,6 +107,7 @@ class MockGateway {
   msgSeq = 0;
   inviteSeq = 0;
   messagesByGroup = new Map<string, StoredMessage[]>();
+  joinAttempts: Array<{ groupId: string; accountId: string; at: number }> = [];
   sseClients = new Set<{ reply: FastifyReply; lastSent: number }>();
   media = new Map<string, Buffer>();
 
@@ -122,6 +125,7 @@ class MockGateway {
     this.inviteSeq = 0;
     this.messagesByGroup.clear();
     this.media.clear();
+    this.joinAttempts = [];
   }
 
   delay(min: number, max: number): number {
@@ -302,6 +306,8 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
       inviteExpireUsed: false,
       writeForbidden: false,
       ownerLeft: false,
+      promoteCalls: 0,
+      promoteInjected: [],
     });
     return { groupId: id };
   });
@@ -338,6 +344,7 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
     const a = gw.account(accountId);
     if (a.terminal === "suspended") return err(reply, 403, "ACCOUNT_SUSPENDED");
     if (a.terminal === "session_expired") return err(reply, 401, "SESSION_EXPIRED");
+    gw.joinAttempts.push({ groupId, accountId, at: Date.now() });
     if (!a.connected) return err(reply, 409, "ACCOUNT_OFFLINE");
     if (group.members.has(a.platformUserId)) return err(reply, 409, "ALREADY_MEMBER");
     const invite = group.invites.find((i) => i.link === inviteLink);
@@ -369,6 +376,12 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
     if (!byAccountId || !accountId) return err(reply, 400, "BAD_REQUEST");
     const by = gw.account(byAccountId);
     const target = gw.account(accountId);
+    group.promoteCalls += 1;
+    const injected = group.promoteInjected.shift();
+    if (injected) {
+      if (injected.once === false) group.promoteInjected.unshift(injected);
+      return err(reply, 409, injected.code);
+    }
     const byMember = group.members.get(by.platformUserId);
     if (!byMember || byMember.role !== "owner") return err(reply, 403, "NO_PERMISSION");
     const targetMember = group.members.get(target.platformUserId);
@@ -577,10 +590,12 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
 
   app.post("/__admin/groups/:id/inject", (req, reply) => {
     const { id } = req.params as { id: string };
-    const { code } = (req.body ?? {}) as { code?: string };
+    const { code, once } = (req.body ?? {}) as { code?: string; once?: boolean };
     const group = gw.groups.get(id);
     if (!group) return err(reply, 404, "GROUP_NOT_FOUND");
     if (code === "GROUP_WRITE_FORBIDDEN") group.writeForbidden = true;
+    else if (code === "NOT_MEMBER_YET")
+      group.promoteInjected.push(once === undefined ? { code } : { code, once });
     return { ok: true };
   });
 
@@ -643,7 +658,9 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
       })),
       writeForbidden: g.writeForbidden,
       ownerLeft: g.ownerLeft,
+      promoteCalls: g.promoteCalls,
     })),
+    joinAttempts: gw.joinAttempts,
     events: gw.events,
     messages: [...gw.messagesByGroup.entries()].map(([groupId, msgs]) => ({
       groupId,
