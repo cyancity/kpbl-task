@@ -53,6 +53,8 @@ interface InjectRule {
   retryAfterSeconds?: number;
   once?: boolean;
   actuallyDelivered?: boolean;
+  /** Deterministic landing delay for a 504'd send that still lands. */
+  landDelayMs?: number;
   httpStatus?: number;
 }
 
@@ -228,17 +230,6 @@ class MockGateway {
         groupId: group.id,
         clientMsgId,
         code: "ACCOUNT_SUSPENDED",
-      });
-      return;
-    }
-    // Resends carry the same clientMsgId; the gateway collapses them into one message.
-    const existing = this.groupMessages(group.id).find((m) => m.clientMsgId === clientMsgId);
-    if (existing) {
-      this.emit("message_sent", {
-        groupId: group.id,
-        clientMsgId,
-        msgId: existing.msgId,
-        sentAt: existing.sentAt,
       });
       return;
     }
@@ -498,7 +489,7 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
         if (injected.actuallyDelivered) {
           setTimeout(
             () => gw.landMessage(group, a, clientMsgId, text ?? "", mediaUrl),
-            gw.delay(100, 1900),
+            injected.landDelayMs ?? gw.delay(100, 1900),
           ).unref();
         }
         return err(reply, 504, "NETWORK_TIMEOUT");

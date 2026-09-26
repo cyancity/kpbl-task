@@ -13,12 +13,13 @@ interface UnknownRow {
   msg_id: string | null;
   resend_count: number;
   first_404_at: Date | null;
+  unknown_since: Date;
 }
 
 export async function reconcilerTick(ctx: AppContext): Promise<void> {
   const { rows } = await ctx.pool.query<UnknownRow>(
     `SELECT m.id, m.group_id, g.gateway_group_id, m.client_msg_id, m.msg_id,
-            m.resend_count, m.first_404_at
+            m.resend_count, m.first_404_at, m.unknown_since
        FROM messages m
        JOIN groups g ON g.id = m.group_id
       WHERE m.delivery_status = 'unknown'
@@ -59,13 +60,21 @@ async function reconcileOne(ctx: AppContext, row: UnknownRow): Promise<void> {
     return;
   }
 
-  // 404: mark the first successful negative probe.
+  // 404: mark the first successful negative probe. A 404 only counts as
+  // "confirmed not sent" once the gateway's landing window (2s after the
+  // 504) has fully elapsed: anchor at BOTH unknown_since and the first
+  // 404 probe after any 503-induced reset.
   const first404 = row.first_404_at ?? new Date();
   await ctx.pool.query(
     "UPDATE messages SET first_404_at = COALESCE(first_404_at, now()) WHERE id = $1",
     [row.id],
   );
-  if (Date.now() - first404.getTime() < CONFIRM_MISSING_MS) return;
+  if (
+    Date.now() - first404.getTime() < CONFIRM_MISSING_MS ||
+    Date.now() - row.unknown_since.getTime() < CONFIRM_MISSING_MS
+  ) {
+    return;
+  }
 
   if (row.resend_count === 0) {
     // Confirmed never landed: resend once with the same clientMsgId.

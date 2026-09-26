@@ -281,6 +281,59 @@ describe("S5 idempotent send", () => {
     const st = await agentState();
     expect(st.auditCalls).toHaveLength(1);
   });
+
+  it("504 landing at 1950ms: no resend, exactly one gateway message, ends sent", async () => {
+    const { groupId, gatewayGroupId } = await agentGroup();
+    await script({
+      "*": [
+        { kind: "tool_use", name: "send_message", input: { text: "once", idempotency_key: "k1" } },
+        { kind: "end_turn", text: "done" },
+      ],
+    });
+    await env.gatewayApp.inject({
+      method: "POST",
+      url: `/__admin/accounts/acc-1/inject`,
+      payload: {
+        code: "NETWORK_TIMEOUT",
+        once: true,
+        actuallyDelivered: true,
+        landDelayMs: 1950,
+      },
+    });
+    await externalJoin(gatewayGroupId, "pu-ext-1");
+    await externalMessage(gatewayGroupId, "pu-ext-1", "go");
+    await waitFor(async () => (await runs(groupId))[0]?.status === "finished", 15000);
+    // give the reconciler a chance to misbehave, then check the count again
+    await new Promise((r) => setTimeout(r, 800));
+    const msgs = await gwMessages(gatewayGroupId);
+    expect(msgs).toHaveLength(1);
+    const { rows } = await env.pool.query<{ delivery_status: string }>(
+      "SELECT delivery_status FROM messages WHERE is_own",
+    );
+    expect(rows[0]!.delivery_status).toBe("sent");
+  });
+
+  it("mock fidelity: same clientMsgId sent twice yields two gateway messages", async () => {
+    const { gatewayGroupId } = await agentGroup();
+    const clientMsgId = crypto.randomUUID();
+    for (let i = 0; i < 2; i++) {
+      const res = await env.gatewayApp.inject({
+        method: "POST",
+        url: `/groups/${gatewayGroupId}/send`,
+        payload: { accountId: "acc-1", clientMsgId, text: "dup" },
+      });
+      expect(res.statusCode).toBe(202);
+    }
+    await waitFor(async () => (await gwMessages(gatewayGroupId)).length === 2, 5000);
+    const msgs = await gwMessages(gatewayGroupId);
+    expect(new Set(msgs.map((m) => m.msgId)).size).toBe(2);
+    // by-client-id still resolves to the earliest
+    const probe = await env.gatewayApp.inject({
+      method: "GET",
+      url: `/groups/${gatewayGroupId}/messages/by-client-id/${clientMsgId}`,
+    });
+    expect((probe.json() as { msgId: string }).msgId).toBe(msgs[0]!.msgId);
+  });
 });
 
 describe("S6 protocol errors", () => {
