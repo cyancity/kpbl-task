@@ -79,7 +79,18 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       throw new AppError(401, "UNAUTHORIZED", "session expired");
     }
 
-    await ctx.pool.query("UPDATE refresh_tokens SET used_at = now() WHERE id = $1", [row.id]);
+    // Atomic rotation: the WHERE clause makes a concurrent refresh of the same
+    // token a no-op, so the loser is detected as reuse (and revokes the
+    // session) instead of silently receiving a second valid access token.
+    const { rowCount } = await ctx.pool.query(
+      "UPDATE refresh_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL",
+      [row.id],
+    );
+    if (!rowCount) {
+      await revokeSession(ctx.pool, row.session_id);
+      ctx.sessionCache.markRevoked(row.session_id);
+      throw new AppError(401, "UNAUTHORIZED", "refresh token reuse detected");
+    }
     const newRefresh = await issueRefreshToken(ctx.pool, row.session_id);
     const accessToken = signAccessToken(ctx.config.jwtSecret, {
       sub: row.username,

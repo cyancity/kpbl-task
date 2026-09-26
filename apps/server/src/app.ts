@@ -46,7 +46,8 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   const authenticate = async (req: FastifyRequest): Promise<AccessClaims> => {
     const header = req.headers.authorization;
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
+    // RFC 7235: the auth scheme is case-insensitive.
+    const token = header && /^bearer /i.test(header) ? header.slice(7) : null;
     if (!token) throw new AppError(401, "UNAUTHORIZED", "missing access token");
     return verifyAccess(token);
   };

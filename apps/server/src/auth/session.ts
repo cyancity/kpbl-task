@@ -62,26 +62,32 @@ export async function revokeSession(pool: pg.Pool, sessionId: string): Promise<v
   );
 }
 
-/** Small cache so we do not hit the DB for every request; invalidated on revoke in-process. */
+/** Positive-only cache: a revoked marker never expires, while active sessions
+ *  are re-checked against the DB so a logout on another instance takes effect
+ *  immediately (a cached "active" verdict would linger otherwise). */
 export class SessionRevocationCache {
-  private cache = new Map<string, { revoked: boolean; at: number }>();
+  private cache = new Map<string, { at: number }>();
   private ttlMs = 5000;
 
   constructor(private readonly pool: pg.Pool) {}
 
   markRevoked(sessionId: string): void {
-    this.cache.set(sessionId, { revoked: true, at: Date.now() });
+    this.cache.set(sessionId, { at: Date.now() });
   }
 
   async isRevoked(sessionId: string): Promise<boolean> {
     const hit = this.cache.get(sessionId);
-    if (hit && Date.now() - hit.at < this.ttlMs) return hit.revoked;
+    if (hit && Date.now() - hit.at < this.ttlMs) return true;
     const { rows } = await this.pool.query<{ revoked_at: Date | null }>(
       "SELECT revoked_at FROM auth_sessions WHERE id = $1",
       [sessionId],
     );
     const revoked = !rows[0] || rows[0].revoked_at !== null;
-    this.cache.set(sessionId, { revoked, at: Date.now() });
+    if (revoked) {
+      this.markRevoked(sessionId);
+    } else {
+      this.cache.delete(sessionId);
+    }
     return revoked;
   }
 }
