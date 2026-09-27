@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Routes, Route, Link, Navigate, Outlet, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth";
 import { connectWs } from "./ws";
@@ -23,10 +23,30 @@ function Layout() {
   return (
     <>
       <header className="topbar">
-        <span className="brand">多账号群组消息平台</span>
+        <Link to="/groups" className="brand">
+          <span className="brand-mark" aria-hidden>
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+              <circle cx="3" cy="12" r="1.5" fill="currentColor" />
+              <path
+                d="M3 8a4 4 0 014 4"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <path
+                d="M3 3.5A8.5 8.5 0 0111.5 12"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                opacity=".5"
+              />
+            </svg>
+          </span>
+          多账号群组消息平台
+        </Link>
         <nav>
-          <Link to="/accounts">账号</Link>
-          <Link to="/groups">群组</Link>
+          <NavLink to="/accounts">账号</NavLink>
+          <NavLink to="/groups">群组</NavLink>
         </nav>
         <span className="spacer" />
         <span className="user">

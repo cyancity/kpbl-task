@@ -73,7 +73,7 @@ function CreateGroupForm({ onDone }: { onDone: () => void }) {
         ))}
       </fieldset>
       {error && <div className="error-banner">{error}</div>}
-      <button disabled={!creator} onClick={() => void submit()}>
+      <button className="btn-primary" disabled={!creator} onClick={() => void submit()}>
         创建
       </button>
       {job && (

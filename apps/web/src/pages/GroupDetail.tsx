@@ -254,7 +254,7 @@ export default function GroupDetail() {
             value={sendText}
             onChange={(e) => setSendText(e.target.value)}
           />
-          <button disabled={!sendTo || !sendText} onClick={() => void send()}>
+          <button className="btn-primary" disabled={!sendTo || !sendText} onClick={() => void send()}>
             发送
           </button>
         </div>

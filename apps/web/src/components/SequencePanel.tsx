@@ -252,7 +252,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         <button disabled={!seqId} onClick={() => void precheck()}>
           预检
         </button>
-        <button disabled={!preview} onClick={() => void start()}>
+        <button className="btn-primary" disabled={!preview} onClick={() => void start()}>
           启动
         </button>
       </div>
