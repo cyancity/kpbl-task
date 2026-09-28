@@ -72,17 +72,37 @@ interface ToolOutcome {
   endRun?: { status: string; endReason: string; summary?: string };
 }
 
+/** Process boot time: a run persisted before this moment was released by a dead process. */
+const BOOT_AT = Date.now();
+
+/**
+ * Bill the inter-claim gap into elapsed_ms. The spec clocks a run "from
+ * creation" and excludes only downtime, so time spent waiting for the
+ * scheduler between steps still counts. The gap is downtime (skipped) when:
+ *  - the lease is dangling: the previous claimer crashed mid-step
+ *  - the last activity predates this process: released before shutdown
+ * Otherwise (normal scheduling gap, or waiting behind other runs) it counts.
+ */
+const GAP_BILLING_SQL = `
+  elapsed_ms = elapsed_ms + CASE
+    WHEN lease_until IS NOT NULL THEN 0
+    WHEN COALESCE(resumed_at, created_at) < to_timestamp($2::float8 / 1000)
+      THEN GREATEST(0, round(extract(epoch from now()) * 1000 - $2))::bigint
+    ELSE GREATEST(0, round(extract(epoch from (now() - COALESCE(resumed_at, created_at))) * 1000))::bigint
+  END`;
+
 /** Claims one runnable run (SKIP LOCKED + lease) and executes one step. */
 export async function runAgentStepOnce(ctx: AppContext): Promise<boolean> {
   const { rows } = await ctx.pool.query<{ id: string }>(
-    `UPDATE agent_runs SET lease_until = now() + $1 * interval '1 millisecond', resumed_at = now()
+    `UPDATE agent_runs SET lease_until = now() + $1 * interval '1 millisecond', resumed_at = now(),
+       ${GAP_BILLING_SQL}
      WHERE id = (
        SELECT id FROM agent_runs
        WHERE status = 'running' AND (lease_until IS NULL OR lease_until < now())
        ORDER BY created_at
        FOR UPDATE SKIP LOCKED LIMIT 1
      ) RETURNING id`,
-    [ctx.config.agentLeaseMs],
+    [ctx.config.agentLeaseMs, BOOT_AT],
   );
   if (!rows[0]) return false;
   await stepRun(ctx, rows[0].id);
@@ -92,8 +112,10 @@ export async function runAgentStepOnce(ctx: AppContext): Promise<boolean> {
 /** Loads and steps a specific run (test helper). Assumes it is claimable. */
 export async function stepAgentRun(ctx: AppContext, runId: string): Promise<void> {
   await ctx.pool.query(
-    "UPDATE agent_runs SET lease_until = now() + $2 * interval '1 millisecond', resumed_at = now() WHERE id=$1",
-    [runId, ctx.config.agentLeaseMs],
+    `UPDATE agent_runs SET lease_until = now() + $2 * interval '1 millisecond', resumed_at = now(),
+       ${GAP_BILLING_SQL.replace(/\$2/g, "$3")}
+     WHERE id=$1`,
+    [runId, ctx.config.agentLeaseMs, BOOT_AT],
   );
   await stepRun(ctx, runId);
 }
@@ -131,8 +153,25 @@ async function stepRun(ctx: AppContext, runId: string): Promise<void> {
     );
     const lastStep = lastSteps[0];
     if (lastStep && lastStep.state === "executing") {
+      const group = await loadGroup(ctx, run.group_id);
+      const mustCancel =
+        !group || group.status !== "active" || !group.agent_enabled || run.cancel_requested;
       await resolveExecutingStep(ctx, run, lastStep);
+      if (mustCancel) {
+        // resolveExecutingStep may leave the step 'executing' when the gateway
+        // probe cannot confirm the outcome — cancel must land anyway or the
+        // run hangs in 'running' forever and is impossible to stop.
+        await ctx.pool.query(
+          `UPDATE agent_steps SET state='done', is_error=true, error_code='CANCELLED',
+                  result_summary='cancelled while awaiting confirmation'
+           WHERE id=$1 AND state='executing'`,
+          [lastStep.id],
+        );
+        await endRun(ctx, run, "cancelled", "cancelled");
+        return;
+      }
       await persistAfterStep(ctx, run);
+      await maybeCancelAfterStep(ctx, run);
       return;
     }
 

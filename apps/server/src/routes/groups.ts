@@ -66,8 +66,11 @@ async function groupView(client: pg.Pool | pg.PoolClient, id: string) {
 
 export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/api/groups", async () => {
+    // The response enum is active|unreachable|left; a group whose create job is
+    // still running has no usable gateway handle yet and stays out of the API
+    // until it materializes as 'active'. A failed job leaves it hidden.
     const { rows } = await ctx.pool.query<{ id: string }>(
-      "SELECT id FROM groups ORDER BY created_at",
+      "SELECT id FROM groups WHERE status <> 'creating' ORDER BY created_at",
     );
     const views = await Promise.all(rows.map((r) => groupView(ctx.pool, r.id)));
     return views.filter(Boolean);
@@ -77,7 +80,9 @@ export function registerGroupRoutes(app: FastifyInstance, ctx: AppContext): void
     const { id } = req.params as { id: string };
     requireUuid(id, "GROUP_NOT_FOUND");
     const view = await groupView(ctx.pool, id);
-    if (!view) throw new AppError(404, "GROUP_NOT_FOUND", `group ${id} not found`);
+    if (!view || view.status === "creating") {
+      throw new AppError(404, "GROUP_NOT_FOUND", `group ${id} not found`);
+    }
     return view;
   });
 

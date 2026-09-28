@@ -241,9 +241,9 @@ async function dispatch(ctx: AppContext, client: pg.PoolClient, ev: SseEvent): P
     case "message_failed":
       return onMessageFailed(ctx, client, d);
     case "member_joined":
-      return onMemberJoined(ctx, client, d);
+      return onMemberJoined(ctx, client, ev);
     case "member_left":
-      return onMemberLeft(ctx, client, d);
+      return onMemberLeft(ctx, client, ev);
     case "account_status":
       return onAccountStatus(ctx, client, d);
   }
@@ -378,13 +378,29 @@ async function onMessageFailed(
   const { rows } = await client.query<{
     id: string;
     group_id: string;
+    delivery_status: string | null;
     sender_account_id: string | null;
   }>(
-    "UPDATE messages SET delivery_status='failed', fail_code=$2, sending_since=NULL WHERE client_msg_id=$1 RETURNING id, group_id, sender_account_id",
-    [clientMsgId, code],
+    "SELECT id, group_id, delivery_status, sender_account_id FROM messages WHERE client_msg_id=$1 FOR UPDATE",
+    [clientMsgId],
   );
   const row = rows[0];
   if (!row) return;
+  // A failure event for a message already resolved is stale ordering noise —
+  // 'sent' means the gateway confirmed delivery, 'cancelled' means we already
+  // gave up on it; neither may be overwritten.
+  if (row.delivery_status === "sent" || row.delivery_status === "cancelled") {
+    await emitWs(client, "inconsistency", {
+      kind: "stale_failure",
+      ref: clientMsgId,
+      message: `message_failed(${code}) arrived for a message already ${row.delivery_status}`,
+    });
+    return;
+  }
+  await client.query(
+    "UPDATE messages SET delivery_status='failed', fail_code=$2, sending_since=NULL WHERE id=$1",
+    [row.id, code],
+  );
   await emitWs(client, "message", {
     groupId: row.group_id,
     msgId: null,
@@ -408,10 +424,22 @@ async function onMessageFailed(
 async function onMemberJoined(
   ctx: AppContext,
   client: pg.PoolClient,
-  d: Record<string, unknown>,
+  ev: SseEvent,
 ): Promise<void> {
+  const d = ev.data;
   const groupId = await groupByGatewayId(client, String(d.groupId));
-  if (!groupId) return;
+  if (!groupId) {
+    await client.query(
+      "INSERT INTO dead_events (event_id, type, payload, error) VALUES ($1,$2,$3,$4)",
+      [ev.id, ev.type, JSON.stringify(ev.data), "member_joined for unknown group"],
+    );
+    await emitWs(client, "inconsistency", {
+      kind: "unknown_group",
+      ref: d.groupId,
+      message: "member_joined event for unknown group",
+    });
+    return;
+  }
   const platformUserId = String(d.platformUserId);
   const { rows: acc } = await client.query<{ id: string }>(
     "SELECT id FROM accounts WHERE platform_user_id = $1",
@@ -429,10 +457,22 @@ async function onMemberJoined(
 async function onMemberLeft(
   ctx: AppContext,
   client: pg.PoolClient,
-  d: Record<string, unknown>,
+  ev: SseEvent,
 ): Promise<void> {
+  const d = ev.data;
   const groupId = await groupByGatewayId(client, String(d.groupId));
-  if (!groupId) return;
+  if (!groupId) {
+    await client.query(
+      "INSERT INTO dead_events (event_id, type, payload, error) VALUES ($1,$2,$3,$4)",
+      [ev.id, ev.type, JSON.stringify(ev.data), "member_left for unknown group"],
+    );
+    await emitWs(client, "inconsistency", {
+      kind: "unknown_group",
+      ref: d.groupId,
+      message: "member_left event for unknown group",
+    });
+    return;
+  }
   const platformUserId = String(d.platformUserId);
   // rowCount=0 means the terminal cascade already removed the member and
   // emitted member_changed — do not emit a duplicate.

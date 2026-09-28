@@ -74,6 +74,19 @@ async function finishJob(
   }
 }
 
+/**
+ * Mid-step checkpoint: persists state without touching the lease. Unlike
+ * saveState (which ends a step by releasing the claim), this keeps the job
+ * locked so no second instance can step it concurrently — it exists purely to
+ * make a side-effect's intent durable before the call goes out.
+ */
+async function persistJobState(ctx: AppContext, jobId: string, state: unknown): Promise<void> {
+  await ctx.pool.query("UPDATE jobs SET state=$2, updated_at=now() WHERE id=$1", [
+    jobId,
+    JSON.stringify(state),
+  ]);
+}
+
 async function saveState(
   ctx: AppContext,
   jobId: string,
@@ -270,7 +283,18 @@ async function stepCreateGroup(ctx: AppContext, job: JobRow): Promise<void> {
         state.phase = "done";
         return saveState(ctx, job.id, state, errors, null);
       }
+      if (state.promoteCalls >= 2) {
+        // Both calls were already consumed; a previous attempt crashed with the
+        // result unknown. Calling again would break the ≤2 total-call contract.
+        errors.push({ step: "promote", code: "RESULT_UNKNOWN" });
+        state.phase = "done";
+        return saveState(ctx, job.id, state, errors, null);
+      }
       state.promoteCalls += 1;
+      // Count the call before making it: a crash between the gateway call and
+      // saveState would otherwise replay with a stale counter and exceed the
+      // two-call budget.
+      await persistJobState(ctx, job.id, state);
       try {
         await ctx.gateway.promote(
           state.gatewayGroupId!,
@@ -327,6 +351,8 @@ async function stepLeaveAll(ctx: AppContext, job: JobRow): Promise<void> {
           state.leaveIssued[account_id] = "error";
           errors.push({ step: `leave:${account_id}`, code: gwCode(err) });
         }
+        // Persist per member so a crash mid-loop does not re-issue leaves.
+        await persistJobState(ctx, job.id, state);
       }
       state.deadline = now + LEAVE_WAIT_MS;
       state.phase = "await";

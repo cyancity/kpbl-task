@@ -645,6 +645,19 @@ export function buildMockGateway(opts: { seed?: number } = {}): FastifyInstance 
     return { ok: true };
   });
 
+  // Emit an arbitrary SSE event — for injecting orderings the normal flows
+  // cannot produce (e.g. message_failed after message_sent, member events for
+  // groups the server does not know).
+  app.post("/__admin/emit-event", (req, reply) => {
+    const { type, data } = (req.body ?? {}) as {
+      type?: string;
+      data?: Record<string, unknown>;
+    };
+    if (!type || !data) return err(reply, 400, "BAD_REQUEST");
+    gw.emit(type, data);
+    return { ok: true };
+  });
+
   app.get("/__admin/state", () => ({
     config: gw.config,
     accounts: [...gw.accounts.values()].map((a) => ({
