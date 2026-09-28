@@ -125,9 +125,9 @@
 - B 节混沌时长 45s（计划写 60s），断言等价。
 - agent 时钟精度受 worker 轮询间隔影响，测试用阈值断言而非精确值。
 
-## 第二轮：面试官视角评审的复核修复（regression.test.ts，9 用例）
+## 第二轮：独立对抗性复核修复（regression.test.ts，9 用例）
 
-独立评审报告产出后又逐条对照代码复核，结论：9 项成立修复，2 项误报（SSE gap-jump 丢事件——`processEvent` 不按水位丢弃；不存在群 send 返回 200——`sendToGroup` 已 404）。
+对抗复核逐条对照源码验证，结论：9 项成立修复，2 项误报（SSE gap-jump 丢事件——`processEvent` 不按水位丢弃；不存在群 send 返回 200——`sendToGroup` 已 404）。
 
 | 缺陷 | 修复 |
 | --- | --- |

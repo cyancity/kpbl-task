@@ -10,7 +10,7 @@ export default defineConfig({
     include: ["test/adversarial/**/*.test.ts"],
     env: {
       ADV_DATABASE_URL:
-        process.env.ADV_DATABASE_URL ?? "postgres://devin@localhost:5432/gmp_adv",
+        process.env.ADV_DATABASE_URL ?? "postgres://gmp:gmp@localhost:5432/gmp_adv",
       JWT_SECRET: "adv-secret",
     },
   },

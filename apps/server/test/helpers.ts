@@ -8,7 +8,7 @@ import { runMigrations } from "../src/db/migrate.js";
 import type { AppConfig } from "../src/config.js";
 
 export const TEST_DB_URL =
-  process.env.TEST_DATABASE_URL ?? "postgres://devin@localhost:5432/gmp_test";
+  process.env.TEST_DATABASE_URL ?? "postgres://gmp:gmp@localhost:5432/gmp_test";
 
 const ADMIN_HASH = "$2a$10$IeTWmbnQs8ho6C.qld/SP./cZvuq8n4RUX06VurV2NaKFQNXaQfDu";
 const VIEWER_HASH = "$2a$10$bdm0gRi.le5.oimyasSR3utb.VSObwIu4RVjWaAofrjLXCP.Aecpa";

@@ -27,11 +27,13 @@ packages/
 前置：Node ≥ 20（建议 24）、PostgreSQL 16（brew 或 docker）。
 
 ```bash
-createdb gmp_dev
-cp .env.example apps/server/.env   # 或直接 export；server 读 process.env
+docker compose up -d             # postgres:16，初始化 gmp/gmp 用户与 gmp_dev 库
+cp .env.example apps/server/.env # 或直接 export；server 读 process.env
 npm i
 npm run dev        # 先跑 migrate，再用 concurrently 启动全部 4 个进程
 ```
+
+不用 Docker 时（brew/本机 postgres）：`psql -c "CREATE ROLE gmp LOGIN PASSWORD 'gmp' SUPERUSER"` 后 `createdb -O gmp gmp_dev`，或把 `DATABASE_URL` 指到本机已有账号。
 
 | 进程          | 端口 | 说明                          |
 | ------------- | ---- | ----------------------------- |
@@ -114,13 +116,16 @@ curl -s -X POST localhost:3000/api/accounts/acc-1/transition -H "$AUTH" \
 ## 测试
 
 ```bash
-createdb gmp_test
-TEST_DATABASE_URL=postgres://localhost:5432/gmp_test npm test
+docker compose exec postgres createdb -U gmp gmp_test    # 单测库
+docker compose exec postgres createdb -U gmp gmp_adv     # 对抗性套件库
+npm test                       # server + web 单测
+npm run test:adversarial       # 对抗性套件：kill -9 恢复 / 混沌 / 多实例 / spec 精读 / 时序
+npm run test:e2e -w apps/web   # Playwright 前端验收（需 dev 栈在跑）
 npm run typecheck && npm run lint
-npm run build        # 构建全部 workspace
+npm run build                  # 构建全部 workspace
 ```
 
-测试库由 `truncateAll` 在每个用例间清空；mock-gateway / mock-agent 在进程内以随机端口启动。
+测试库由 `truncateAll` 在每个用例间清空；mock-gateway / mock-agent 在进程内以随机端口启动。测试/对抗库默认 `postgres://gmp:gmp@localhost:5432/gmp_test`（`gmp_adv`），可用 `TEST_DATABASE_URL` / `ADV_DATABASE_URL` 覆盖。
 
 ## 设计要点
 
@@ -133,6 +138,5 @@ npm run build        # 构建全部 workspace
 
 ## 未做
 
-- **C1**（多实例水平扩展演示）：机制已就绪（SKIP LOCKED、部分唯一索引、无内存状态），未做两实例联调演示。
+- **C1**（水平扩展）：机制就绪且有双实例测试覆盖（`test/adversarial/c-multi.test.ts` M1–M4：并发启动冲突、FIFO 跨实例、job 单实例执行），未做生产级多副本部署演示。
 - **C2**（媒体消息）：mock 与 schema 支持 `mediaUrl` 透传，UI 未做上传/展示。
-- **C3**（前端 e2e）：有 `apps/web` 的 vitest 单测（api client 单飞 refresh、错误包络），未做 Playwright 冒烟。

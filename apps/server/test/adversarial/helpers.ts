@@ -8,7 +8,7 @@ import { runMigrations } from "../../src/db/migrate.js";
 import { truncateAll } from "../helpers.js";
 
 export const ADV_DB_URL =
-  process.env.ADV_DATABASE_URL ?? "postgres://devin@localhost:5432/gmp_adv";
+  process.env.ADV_DATABASE_URL ?? "postgres://gmp:gmp@localhost:5432/gmp_adv";
 
 export async function migrateAdvDb(): Promise<void> {
   const pool = createPool(ADV_DB_URL);
