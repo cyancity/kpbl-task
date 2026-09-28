@@ -229,7 +229,8 @@ export default function GroupDetail() {
         </thead>
         <tbody>
           {group.members.map((m) => (
-            <tr key={m.accountId}>
+            // External members have accountId=null; platformUserId is unique per row.
+            <tr key={m.platformUserId}>
               <td>{m.accountId}</td>
               <td>{m.platformUserId}</td>
               <td>{m.role}</td>

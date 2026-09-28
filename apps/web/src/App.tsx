@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth";
 import { connectWs } from "./ws";
 import { getAccessToken, setAuthExpiredHandler } from "./api/client";
+import { pushAlert, useAlerts, dismissAlert } from "./alerts";
 import Login from "./pages/Login";
 import Accounts from "./pages/Accounts";
 import Groups from "./pages/Groups";
@@ -20,6 +21,7 @@ function RequireAuth() {
 function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const alerts = useAlerts();
   return (
     <>
       <header className="topbar">
@@ -60,6 +62,19 @@ function Layout() {
           退出
         </button>
       </header>
+      {alerts.length > 0 && (
+        <div className="alerts" role="status">
+          {alerts.map((a) => (
+            <div key={a.id} className="alert">
+              <span className="badge status-unknown">{a.kind}</span>
+              <span className="alert-msg">{a.message}</span>
+              <button className="alert-dismiss" onClick={() => dismissAlert(a.id)}>
+                知道了
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <main>
         <Outlet />
       </main>
@@ -105,6 +120,15 @@ export default function App() {
         case "job":
           void qc.invalidateQueries({ queryKey: ["job", ev.payload.jobId] });
           void qc.invalidateQueries({ queryKey: ["groups"] });
+          break;
+        case "member_changed":
+          void qc.invalidateQueries({ queryKey: ["group", ev.payload.groupId] });
+          break;
+        case "inconsistency":
+          pushAlert(
+            String(ev.payload.kind ?? "inconsistency"),
+            String(ev.payload.message ?? ""),
+          );
           break;
       }
     });
