@@ -113,6 +113,8 @@ curl -s -X POST localhost:3000/api/accounts/acc-1/transition -H "$AUTH" \
 
 查看 mock 状态：`GET localhost:4000/__admin/state`、`GET localhost:4100/__admin/state`；重置：`POST /__admin/reset`。
 
+`npm run dev` 里 mock-agent 带 `MOCK_AGENT_DEFAULT=auto-reply`：未配剧本的 run 默认走 `get_recent_messages → send_message → end_turn`，外部消息进群即可看到自动应答。测试与对抗套件不设此变量，默认仍是立即 `end_turn`；`__admin/script` 配置的剧本优先于默认剧本。
+
 ## 测试
 
 ```bash

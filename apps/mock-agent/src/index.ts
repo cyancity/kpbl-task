@@ -29,7 +29,21 @@ interface AgentState {
   tuSeq: number;
   turnCalls: Array<{ runId: string; body: unknown }>;
   auditCalls: Array<{ body: unknown }>;
+  defaultProgress: Map<string, number>;
 }
+
+// MOCK_AGENT_DEFAULT=auto-reply 时，没有剧本的 run 走这段固定应答：
+// 先读群消息再回一句，让 dev 演示里 agent 的行为在时间线上可见。
+// 测试不设这个环境变量，默认仍是立即 end_turn。
+const AUTO_REPLY_SCRIPT: Step[] = [
+  { kind: "tool_use", name: "get_recent_messages", input: { limit: 5 } },
+  {
+    kind: "tool_use",
+    name: "send_message",
+    input: { text: "自动回复：已收到你的消息。", idempotency_key: "auto-reply" },
+  },
+  { kind: "end_turn", text: "auto-reply done" },
+];
 
 const EXPECTED_TOOLS = ["get_recent_messages", "send_message", "kick_user", "finish"];
 
@@ -61,7 +75,9 @@ export function buildMockAgent(): FastifyInstance {
     tuSeq: 0,
     turnCalls: [],
     auditCalls: [],
+    defaultProgress: new Map(),
   };
+  const useDefaultScript = process.env.MOCK_AGENT_DEFAULT === "auto-reply";
 
   const scriptFor = (runId: string): Step[] | undefined => {
     for (const [key, steps] of st.scripts) {
@@ -113,8 +129,16 @@ export function buildMockAgent(): FastifyInstance {
     }
     st.turnCalls.push({ runId: body.runId, body });
     const steps = scriptFor(body.runId);
-    const step =
-      steps && steps.length > 0 ? steps.shift()! : { kind: "end_turn" as const, text: "done" };
+    let step: Step;
+    if (steps && steps.length > 0) {
+      step = steps.shift()!;
+    } else if (useDefaultScript) {
+      const i = st.defaultProgress.get(body.runId) ?? 0;
+      st.defaultProgress.set(body.runId, i + 1);
+      step = AUTO_REPLY_SCRIPT[i] ?? { kind: "end_turn" as const, text: "done" };
+    } else {
+      step = { kind: "end_turn" as const, text: "done" };
+    }
     return respond(reply, body.runId, step);
   });
 
@@ -154,6 +178,7 @@ export function buildMockAgent(): FastifyInstance {
     st.scripts.clear();
     st.auditRules = [];
     st.lastToolUseIds.clear();
+    st.defaultProgress.clear();
     st.tuSeq = 0;
     st.turnCalls.length = 0;
     st.auditCalls.length = 0;

@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run migrate -w apps/server && concurrently -n gateway,agent,server,web \"npm run dev -w apps/mock-gateway\" \"npm run dev -w apps/mock-agent\" \"npm run dev -w apps/server\" \"npm run dev -w apps/web\"",
+    "dev": "npm run migrate -w apps/server && concurrently -n gateway,agent,server,web \"npm run dev -w apps/mock-gateway\" \"MOCK_AGENT_DEFAULT=auto-reply npm run dev -w apps/mock-agent\" \"npm run dev -w apps/server\" \"npm run dev -w apps/web\"",
     "build": "npm run build --workspaces --if-present",
     "test": "npm test -w apps/server && npm test -w apps/web",
     "lint": "eslint .",
