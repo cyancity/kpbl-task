@@ -23,6 +23,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
     queryFn: () => apiFetch("/api/sequences") as Promise<Sequence[]>,
   });
   const [seqId, setSeqId] = useState("");
+  const selected = (sequences ?? []).find((s) => s.id === seqId);
   const [vars, setVars] = useState<{ k: string; v: string }[]>([]);
   const [stepVars, setStepVars] = useState<{ step: string; k: string; v: string }[]>([]);
   const [preview, setPreview] = useState<ResolvedStep[] | null>(null);
@@ -90,13 +91,30 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
   return (
     <div className="card">
       <h3>定时序列</h3>
+      <p className="hint">
+        序列是发信脚本：按步依次发送，每步可指定发送账号角色、文本（支持 {"{var}"}
+        占位符）和延迟。延迟从上一条实际发出后起算。
+      </p>
       <label>
         序列
         <select
           value={seqId}
           onChange={(e) => {
-            setSeqId(e.target.value);
+            const next = e.target.value;
+            setSeqId(next);
             setPreview(null);
+            const tpl = (sequences ?? []).find((s) => s.id === next);
+            const keys = [
+              ...new Set(
+                (tpl?.steps ?? []).flatMap((s) =>
+                  [...s.text.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((m) => m[1]!),
+                ),
+              ),
+            ];
+            setVars((prev) => {
+              const old = Object.fromEntries(prev.map((r) => [r.k, r.v]));
+              return keys.map((k) => ({ k, v: old[k] ?? "" }));
+            });
           }}
         >
           <option value="">选择序列</option>
@@ -107,6 +125,18 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
           ))}
         </select>
       </label>
+      {selected && (
+        <div className="seq-steps">
+          {selected.steps.map((s) => (
+            <div key={s.index} className="seq-step">
+              <span className="seq-idx">#{s.index}</span>
+              <span className="badge">{s.accountRole}</span>
+              <span className="seq-text">{s.text}</span>
+              <span className="seq-delay">+{s.delaySeconds}s</span>
+            </div>
+          ))}
+        </div>
+      )}
       <button className="link" onClick={() => setShowCreate(!showCreate)}>
         {showCreate ? "收起" : "新建序列"}
       </button>
@@ -116,11 +146,19 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
             名称
             <input value={newName} onChange={(e) => setNewName(e.target.value)} />
           </label>
+          <div className="step-row step-head">
+            <span>步序</span>
+            <span>发送角色</span>
+            <span>文本（{"{var}"} 为占位符）</span>
+            <span>延迟秒</span>
+            <span></span>
+          </div>
           {newSteps.map((s, i) => (
             <div key={i} className="step-row">
               <input
                 type="number"
                 className="idx"
+                title="步序"
                 value={s.index}
                 onChange={(e) =>
                   setNewSteps(
@@ -132,6 +170,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
               />
               <select
                 value={s.accountRole}
+                title="admin=群主/管理员账号发送；member=普通成员账号发送"
                 onChange={(e) =>
                   setNewSteps(
                     newSteps.map((x, j) =>
@@ -153,7 +192,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
               <input
                 type="number"
                 className="delay"
-                title="delaySeconds"
+                title="延迟秒数：上一步实际发出后等待的秒数（第一步从启动起算）"
                 value={s.delaySeconds}
                 onChange={(e) =>
                   setNewSteps(
@@ -181,7 +220,9 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
           </button>
         </div>
       )}
-      <h4>变量 vars</h4>
+      <h4>
+        变量 <small className="hint-inline">{"{var}"} 占位符在这里填值</small>
+      </h4>
       {vars.map((r, i) => (
         <div key={i} className="step-row">
           <input
@@ -198,7 +239,9 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         </div>
       ))}
       <button onClick={() => setVars([...vars, { k: "", v: "" }])}>+ 变量</button>
-      <h4>stepVars</h4>
+      <h4>
+        按步覆盖 <small className="hint-inline">可选：到第 N 步时把某变量改成新值，向后延续</small>
+      </h4>
       {stepVars.map((r, i) => (
         <div key={i} className="step-row">
           <input

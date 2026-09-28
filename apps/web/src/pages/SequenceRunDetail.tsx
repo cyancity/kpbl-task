@@ -32,6 +32,7 @@ export default function SequenceRunDetail() {
           <tr>
             <th>#</th>
             <th>状态</th>
+            <th>内容</th>
             <th>计划时间</th>
             <th>发出时间</th>
             <th>账号</th>
@@ -45,6 +46,7 @@ export default function SequenceRunDetail() {
               <td>
                 <span className={`badge status-${s.status}`}>{s.status}</span>
               </td>
+              <td className="seq-cell-text">{s.text ?? "—"}</td>
               <td>{s.scheduledAt ? new Date(s.scheduledAt).toLocaleTimeString() : "—"}</td>
               <td>{s.sentAt ? new Date(s.sentAt).toLocaleTimeString() : "—"}</td>
               <td>{s.accountId ?? "—"}</td>

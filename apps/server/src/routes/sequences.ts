@@ -70,6 +70,7 @@ function stepView(s: {
   resolved_vars: unknown;
   var_sources: unknown;
   account_id: string | null;
+  resolved_text: string | null;
 }) {
   return {
     index: s.index,
@@ -80,6 +81,7 @@ function stepView(s: {
     resolvedVars: s.resolved_vars,
     varSources: s.var_sources,
     accountId: s.account_id,
+    text: s.resolved_text,
   };
 }
 

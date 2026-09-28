@@ -93,4 +93,5 @@ export interface SequenceRunStep {
   resolvedVars: Record<string, string>;
   varSources: Record<string, string>;
   accountId: string | null;
+  text: string | null;
 }
