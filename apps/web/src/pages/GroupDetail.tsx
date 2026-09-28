@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "../api/client";
 import type { Account, AgentRun, Group, Job, MessageItem, SequenceRun } from "../api/types";
 import { useCanWrite } from "../auth";
@@ -93,6 +93,7 @@ function Timeline({ groupId }: { groupId: string }) {
 export default function GroupDetail() {
   const { id } = useParams<{ id: string }>();
   const canWrite = useCanWrite();
+  const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [sendTo, setSendTo] = useState("");
   const [sendText, setSendText] = useState("");
@@ -145,6 +146,20 @@ export default function GroupDetail() {
     }
   };
 
+  const runAgent = async () => {
+    setError(null);
+    try {
+      const res = (await apiFetch(`/api/groups/${id}/agent-runs`, { method: "POST" })) as {
+        runId: string;
+      };
+      void qc.invalidateQueries({ queryKey: ["agent-runs", id] });
+      void qc.invalidateQueries({ queryKey: ["agent-run", res.runId] });
+      void refetch();
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.code}: ${e.message}` : "触发失败");
+    }
+  };
+
   const leaveAll = async () => {
     setError(null);
     try {
@@ -185,7 +200,7 @@ export default function GroupDetail() {
         </span>
         {canWrite && (
           <>
-            <label className="inline">
+            <label className="inline" title="开启后群里收到外部消息时自动创建 agent 运行">
               <input
                 type="checkbox"
                 checked={group.agentEnabled}
@@ -193,7 +208,7 @@ export default function GroupDetail() {
               />
               agentEnabled
             </label>
-            <label className="inline">
+            <label className="inline" title="外部恶意/刷屏消息时自动将发送者移出">
               <input
                 type="checkbox"
                 checked={group.autoKickEnabled}
@@ -201,9 +216,23 @@ export default function GroupDetail() {
               />
               autoKickEnabled
             </label>
+            <button
+              onClick={() => void runAgent()}
+              disabled={
+                !group.agentEnabled || group.status !== "active" || !!group.activeAgentRunId
+              }
+              title="手动触发一次 agent 运行（正常由外部消息自动触发）"
+            >
+              运行 Agent
+            </button>
             <button onClick={() => void leaveAll()} disabled={group.status !== "active"}>
               全部退群
             </button>
+            {group.activeAgentRunId && (
+              <span className="hint-inline">
+                agent 运行中：<Link to={`/agent-runs/${group.activeAgentRunId}`}>查看</Link>
+              </span>
+            )}
           </>
         )}
         {job && (

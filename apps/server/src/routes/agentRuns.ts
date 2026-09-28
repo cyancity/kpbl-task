@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import { FastifyInstance } from "fastify";
 import { AppError, requireUuid } from "../errors.js";
+import { emitWs } from "../ws/emit.js";
 import type { AppContext } from "../context.js";
 
 function stepView(s: {
@@ -87,6 +89,49 @@ export function registerAgentRunRoutes(app: FastifyInstance, ctx: AppContext) {
       createdAt: r.created_at.toISOString(),
       endedAt: r.ended_at?.toISOString() ?? null,
     }));
+  });
+
+  // 手动触发一次运行：与外部消息触发同一条路径（单群单 running run 由部分唯一索引保证）。
+  // 要求 agentEnabled 开启且群 active，与自动触发的准入条件一致。
+  app.post("/api/groups/:id/agent-runs", async (req) => {
+    const { id } = req.params as { id: string };
+    requireUuid(id, "GROUP_NOT_FOUND");
+    const runId = crypto.randomUUID();
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO agent_runs (id, group_id, status, trigger_messages)
+         SELECT $1, id, 'running', '[]'::jsonb FROM groups
+         WHERE id = $2 AND agent_enabled AND status = 'active'
+         RETURNING id`,
+        [runId, id],
+      );
+      if (!rows[0]) {
+        const { rows: g } = await client.query<{ agent_enabled: boolean; status: string }>(
+          "SELECT agent_enabled, status FROM groups WHERE id=$1",
+          [id],
+        );
+        if (!g[0]) throw new AppError(404, "GROUP_NOT_FOUND", `group ${id} not found`);
+        throw new AppError(409, "AGENT_DISABLED", "agentEnabled 未开启或群非 active");
+      }
+      await emitWs(client, "agent_run", {
+        runId,
+        groupId: id,
+        status: "running",
+        endReason: null,
+      });
+      await client.query("COMMIT");
+      return { runId };
+    } catch (e) {
+      await client.query("ROLLBACK");
+      if ((e as { code?: string }).code === "23505") {
+        throw new AppError(409, "AGENT_RUN_ACTIVE", "已有运行中的 agent run");
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
   });
 
   app.post("/api/agent-runs/:id/cancel", async (req) => {

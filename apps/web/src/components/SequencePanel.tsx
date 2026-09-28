@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "../api/client";
 import type { Sequence } from "../api/types";
 
@@ -18,6 +18,7 @@ interface ResolvedStep {
 
 export default function SequencePanel({ groupId, onStarted }: Props) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: sequences } = useQuery({
     queryKey: ["sequences"],
     queryFn: () => apiFetch("/api/sequences") as Promise<Sequence[]>,
@@ -93,6 +94,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         method: "POST",
         body: JSON.stringify({ sequenceId: seqId, vars: varsObj, stepVars: stepVarsObj }),
       })) as { runId: string };
+      void qc.invalidateQueries({ queryKey: ["sequence-runs", groupId] });
       onStarted();
       navigate(`/sequence-runs/${res.runId}`);
     } catch (e) {
@@ -107,6 +109,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         method: "POST",
         body: JSON.stringify({ name: newName, steps: newSteps }),
       })) as { id: string };
+      await qc.invalidateQueries({ queryKey: ["sequences"] });
       selectSeq(res.id, newSteps);
       setShowCreate(false);
       onStarted();

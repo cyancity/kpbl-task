@@ -346,3 +346,50 @@ describe("R-API: creating groups stay out of the public enum", () => {
     expect(detail.statusCode).toBe(404);
   });
 });
+
+describe("R-INT: manual agent run trigger", () => {
+  it("409 when agent disabled; creates run when enabled; 409 while one is running", async () => {
+    const { groupId } = await seedGroup(env, token, ["acc-2"]);
+
+    const disabled = await env.app.inject({
+      method: "POST",
+      url: `/api/groups/${groupId}/agent-runs`,
+      headers: auth(token),
+    });
+    expect(disabled.statusCode).toBe(409);
+    expect(
+      (disabled.json() as { error: { code: string } }).error.code,
+    ).toBe("AGENT_DISABLED");
+
+    const patch = await env.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${groupId}`,
+      headers: auth(token),
+      payload: { agentEnabled: true },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const started = await env.app.inject({
+      method: "POST",
+      url: `/api/groups/${groupId}/agent-runs`,
+      headers: auth(token),
+    });
+    expect(started.statusCode).toBe(200);
+    const { runId } = started.json() as { runId: string };
+
+    const dup = await env.app.inject({
+      method: "POST",
+      url: `/api/groups/${groupId}/agent-runs`,
+      headers: auth(token),
+    });
+    expect(dup.statusCode).toBe(409);
+    expect((dup.json() as { error: { code: string } }).error.code).toBe("AGENT_RUN_ACTIVE");
+
+    const { rows } = await env.pool.query(
+      "SELECT status, trigger_messages FROM agent_runs WHERE id=$1",
+      [runId],
+    );
+    expect(rows[0].status).toBe("running");
+    expect(rows[0].trigger_messages).toEqual([]);
+  });
+});
