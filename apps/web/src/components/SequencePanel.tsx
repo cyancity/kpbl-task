@@ -41,13 +41,17 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
     (stepVarsObj[r.step] ??= {})[r.k] = r.v;
   }
 
-  const precheck = async () => {
+  const runResolve = async (
+    id: string,
+    v: Record<string, string>,
+    sv: Record<string, Record<string, string>>,
+  ) => {
     setErr(null);
     setPreview(null);
     try {
-      const res = (await apiFetch(`/api/sequences/${seqId}/resolve`, {
+      const res = (await apiFetch(`/api/sequences/${id}/resolve`, {
         method: "POST",
-        body: JSON.stringify({ vars: varsObj, stepVars: stepVarsObj }),
+        body: JSON.stringify({ vars: v, stepVars: sv }),
       })) as { steps: ResolvedStep[] };
       setPreview(res.steps);
     } catch (e) {
@@ -57,6 +61,29 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         setErr(e instanceof ApiError ? `${e.code}: ${e.message}` : "预检失败");
       }
     }
+  };
+
+  const precheck = () => runResolve(seqId, varsObj, stepVarsObj);
+
+  const selectSeq = (id: string, steps?: Sequence["steps"]) => {
+    setSeqId(id);
+    setErr(null);
+    setStepVars([]);
+    const tpl = (sequences ?? []).find((s) => s.id === id);
+    const tplSteps = steps ?? tpl?.steps ?? [];
+    const keys = [
+      ...new Set(
+        tplSteps.flatMap((s) =>
+          [...s.text.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((m) => m[1]!),
+        ),
+      ),
+    ];
+    setVars((prev) => {
+      const old = Object.fromEntries(prev.map((r) => [r.k, r.v]));
+      return keys.map((k) => ({ k, v: old[k] ?? "" }));
+    });
+    if ((tpl ?? steps) && keys.length === 0) void runResolve(id, {}, {});
+    else setPreview(null);
   };
 
   const start = async () => {
@@ -80,7 +107,7 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
         method: "POST",
         body: JSON.stringify({ name: newName, steps: newSteps }),
       })) as { id: string };
-      setSeqId(res.id);
+      selectSeq(res.id, newSteps);
       setShowCreate(false);
       onStarted();
     } catch (e) {
@@ -92,31 +119,12 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
     <div className="card">
       <h3>定时序列</h3>
       <p className="hint">
-        序列是发信脚本：按步依次发送，每步可指定发送账号角色、文本（支持 {"{var}"}
-        占位符）和延迟。延迟从上一条实际发出后起算。
+        序列是发信脚本：按步依次发送，每步指定发送账号角色、文本（{"{var}"} 为占位符）和延迟。
+        延迟从上一条实际发出后起算。流程：选序列 → 填变量 → 预检 → 启动。
       </p>
       <label>
         序列
-        <select
-          value={seqId}
-          onChange={(e) => {
-            const next = e.target.value;
-            setSeqId(next);
-            setPreview(null);
-            const tpl = (sequences ?? []).find((s) => s.id === next);
-            const keys = [
-              ...new Set(
-                (tpl?.steps ?? []).flatMap((s) =>
-                  [...s.text.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((m) => m[1]!),
-                ),
-              ),
-            ];
-            setVars((prev) => {
-              const old = Object.fromEntries(prev.map((r) => [r.k, r.v]));
-              return keys.map((k) => ({ k, v: old[k] ?? "" }));
-            });
-          }}
-        >
+        <select value={seqId} onChange={(e) => selectSeq(e.target.value)}>
           <option value="">选择序列</option>
           {(sequences ?? []).map((s) => (
             <option key={s.id} value={s.id}>
@@ -137,8 +145,135 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
           ))}
         </div>
       )}
+      {vars.length > 0 && (
+        <h4>
+          变量 <small className="hint-inline">{"{var}"} 占位符在这里填值</small>
+        </h4>
+      )}
+      {vars.map((r, i) => (
+        <div key={i} className="step-row">
+          <input
+            placeholder="key"
+            value={r.k}
+            onChange={(e) => {
+              setPreview(null);
+              setVars(vars.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)));
+            }}
+          />
+          <input
+            placeholder="value"
+            value={r.v}
+            onChange={(e) => {
+              setPreview(null);
+              setVars(vars.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)));
+            }}
+          />
+          <button
+            onClick={() => {
+              setPreview(null);
+              setVars(vars.filter((_, j) => j !== i));
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      {vars.length > 0 && (
+        <button
+          onClick={() => {
+            setPreview(null);
+            setVars([...vars, { k: "", v: "" }]);
+          }}
+        >
+          + 变量
+        </button>
+      )}
+      <details className="seq-adv">
+        <summary>高级：按步覆盖变量（可选）</summary>
+        <p className="hint">
+          到第 N 步时把某变量改成新值，新值向后延续到后面的步骤。留空表示不覆盖。
+        </p>
+        <div className="step-row step-head">
+          <span>第几步起</span>
+          <span>变量名</span>
+          <span>改成</span>
+          <span></span>
+        </div>
+        {stepVars.map((r, i) => (
+          <div key={i} className="step-row">
+            <input
+              className="idx"
+              placeholder="步"
+              value={r.step}
+              onChange={(e) => {
+                setPreview(null);
+                setStepVars(stepVars.map((x, j) => (j === i ? { ...x, step: e.target.value } : x)));
+              }}
+            />
+            <input
+              placeholder="key"
+              value={r.k}
+              onChange={(e) => {
+                setPreview(null);
+                setStepVars(stepVars.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)));
+              }}
+            />
+            <input
+              placeholder="value"
+              value={r.v}
+              onChange={(e) => {
+                setPreview(null);
+                setStepVars(stepVars.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)));
+              }}
+            />
+            <button
+              onClick={() => {
+                setPreview(null);
+                setStepVars(stepVars.filter((_, j) => j !== i));
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => {
+            setPreview(null);
+            setStepVars([...stepVars, { step: "", k: "", v: "" }]);
+          }}
+        >
+          + 覆盖
+        </button>
+      </details>
+      {err && <div className="error-banner">{err}</div>}
+      {preview && (
+        <div className="card inner preview">
+          <h4>预检结果（确认实际发送内容）</h4>
+          {preview.map((s) => (
+            <div key={s.index} className="preview-step">
+              <b>第 {s.index} 步：</b>
+              {s.text}
+              <div className="vars">
+                {Object.entries(s.resolvedVars).map(([k, v]) => (
+                  <span key={k}>
+                    {k}=&quot;{v}&quot;（{s.varSources[k]}）
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="actions">
+        <button disabled={!seqId} onClick={() => void precheck()}>
+          预检
+        </button>
+        <button className="btn-primary" disabled={!preview} onClick={() => void start()}>
+          {preview ? `启动（将发 ${preview.length} 条）` : "启动"}
+        </button>
+      </div>
       <button className="link" onClick={() => setShowCreate(!showCreate)}>
-        {showCreate ? "收起" : "新建序列"}
+        {showCreate ? "收起新建" : "新建序列"}
       </button>
       {showCreate && (
         <div className="card inner">
@@ -220,85 +355,6 @@ export default function SequencePanel({ groupId, onStarted }: Props) {
           </button>
         </div>
       )}
-      <h4>
-        变量 <small className="hint-inline">{"{var}"} 占位符在这里填值</small>
-      </h4>
-      {vars.map((r, i) => (
-        <div key={i} className="step-row">
-          <input
-            placeholder="key"
-            value={r.k}
-            onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
-          />
-          <input
-            placeholder="value"
-            value={r.v}
-            onChange={(e) => setVars(vars.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
-          />
-          <button onClick={() => setVars(vars.filter((_, j) => j !== i))}>✕</button>
-        </div>
-      ))}
-      <button onClick={() => setVars([...vars, { k: "", v: "" }])}>+ 变量</button>
-      <h4>
-        按步覆盖 <small className="hint-inline">可选：到第 N 步时把某变量改成新值，向后延续</small>
-      </h4>
-      {stepVars.map((r, i) => (
-        <div key={i} className="step-row">
-          <input
-            className="idx"
-            placeholder="step"
-            value={r.step}
-            onChange={(e) =>
-              setStepVars(stepVars.map((x, j) => (j === i ? { ...x, step: e.target.value } : x)))
-            }
-          />
-          <input
-            placeholder="key"
-            value={r.k}
-            onChange={(e) =>
-              setStepVars(stepVars.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))
-            }
-          />
-          <input
-            placeholder="value"
-            value={r.v}
-            onChange={(e) =>
-              setStepVars(stepVars.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))
-            }
-          />
-          <button onClick={() => setStepVars(stepVars.filter((_, j) => j !== i))}>✕</button>
-        </div>
-      ))}
-      <button onClick={() => setStepVars([...stepVars, { step: "", k: "", v: "" }])}>
-        + stepVar
-      </button>
-      {err && <div className="error-banner">{err}</div>}
-      {preview && (
-        <div className="card inner preview">
-          <h4>预检结果</h4>
-          {preview.map((s) => (
-            <div key={s.index} className="preview-step">
-              <b>第 {s.index} 步：</b>
-              {s.text}
-              <div className="vars">
-                {Object.entries(s.resolvedVars).map(([k, v]) => (
-                  <span key={k}>
-                    {k}=&quot;{v}&quot;（{s.varSources[k]}）
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="actions">
-        <button disabled={!seqId} onClick={() => void precheck()}>
-          预检
-        </button>
-        <button className="btn-primary" disabled={!preview} onClick={() => void start()}>
-          启动
-        </button>
-      </div>
     </div>
   );
 }
