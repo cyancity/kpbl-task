@@ -3,11 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { ApiError } from "../api/client";
 
+const SEED_ACCOUNTS = [
+  { username: "admin", password: "admin", role: "管理员" },
+  { username: "viewer", password: "viewer", role: "只读" },
+];
+
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -66,6 +71,22 @@ export default function Login() {
         <button type="submit" className="btn-primary" disabled={busy}>
           {busy ? "登录中…" : "登录"}
         </button>
+        <div className="login-seeds">
+          种子账号：
+          {SEED_ACCOUNTS.map((a) => (
+            <button
+              key={a.username}
+              type="button"
+              className="login-seed"
+              onClick={() => {
+                setUsername(a.username);
+                setPassword(a.password);
+              }}
+            >
+              {a.username}（{a.role}）
+            </button>
+          ))}
+        </div>
       </form>
     </div>
   );

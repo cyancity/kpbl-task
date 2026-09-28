@@ -736,6 +736,30 @@ legend {
   padding: 8px 0;
 }
 
+.login-seeds {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.login-seed {
+  width: auto !important;
+  margin: 0 0 0 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.login-seed:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---------- scrollbars ---------- */
 
 .messages::-webkit-scrollbar,
