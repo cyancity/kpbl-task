@@ -124,3 +124,23 @@
 - 性能/压测只有时序类用例（E 节），没有大流量 benchmark；spec 未给 QPS 指标。
 - B 节混沌时长 45s（计划写 60s），断言等价。
 - agent 时钟精度受 worker 轮询间隔影响，测试用阈值断言而非精确值。
+
+## 第二轮：面试官视角评审的复核修复（regression.test.ts，9 用例）
+
+独立评审报告产出后又逐条对照代码复核，结论：9 项成立修复，2 项误报（SSE gap-jump 丢事件——`processEvent` 不按水位丢弃；不存在群 send 返回 200——`sendToGroup` 已 404）。
+
+| 缺陷 | 修复 |
+| --- | --- |
+| `message_failed` 迟到事件无条件覆写 `sent`/`cancelled` 终态 | `onMessageFailed` 改为 `SELECT ... FOR UPDATE` + 终态守卫，覆写尝试转 `inconsistency(stale_failure)` 事件 |
+| 未知群的 `member_joined`/`member_left` 静默丢弃（与 message 的 dead-letter 不一致） | 同 message：写 `dead_events` + `inconsistency(unknown_group)` |
+| agent run 卡在 executing 步时取消永不落地（resolve bail → 循环跳过取消检查，run 永久 running） | stepRun 恢复分支补取消检查；无法确认的步记 `CANCELLED` 后结束 run |
+| spec「从 run 创建起 60 秒，停机不计」字面语义下调度间隙漏计 | claim 时按 CASE 补计间隙：悬挂 lease（崩溃）=0；上次活动早于本进程启动=只计启动后；其余=全计 |
+| `promoteCalls` 仅内存计数，崩溃后重放可超 spec 的 ≤2 次上限 | `persistJobState` 先落库再调用网关；已耗 2 次仍回到 promote 相位 → `RESULT_UNKNOWN` 错误、不再调用 |
+| leave_all 逐成员 leave 进度只在循环末尾落库，崩溃中段重发 | 每个成员处理后 `persistJobState` 原位落库（不释放 lease，防并发重复步进） |
+| `accepted` 无兜底：`message_sent` 永久丢失（如游标跳隙边缘）时消息永远停在中途 | reconciler 增加 stale-accepted 兜底：10s 未落地 → `by-client-id` 探到则补 `sent`；404 说明仍在网关队列，继续等（绝不重发已受理消息） |
+| reconciler 把 unknown 解析为终态但不发 WS 事件，前端看不到状态翻转 | 两个 resolve 路径改为事务内 UPDATE + `emitWs('message')` |
+| `creating` 泄漏出 `GET /api/groups` 响应枚举（spec 只有 active\|unreachable\|left） | 列表过滤 `status <> 'creating'`；详情对 creating 返回 404 |
+| `inconsistency` 事件 WS 已推送但前端无消费，操作员不可见（A2「推事件通知操作员」形同虚设） | `alerts.ts` store + Layout 顶置警示条；`member_changed` 补 group 查询失效 |
+| 外部成员 `accountId=null` 导致 React `key` 碰撞 | 成员行 key 改用 `platformUserId` |
+
+mock-gateway 新增 `POST /__admin/emit-event` 测试口（注入任意 SSE 事件，用于制造真实流程造不出的乱序）。
